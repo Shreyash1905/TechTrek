@@ -257,7 +257,7 @@ export default function CampusViewer3D({ onNavigateHome, onOpen2DMap }) {
 
           <div className="viewer-page-title-group">
             <img
-              src="/images/sdmit_logo_white.png"
+              src="/images/sdmit_logo_white.png?v=2"
               alt="SDMIT Emblem"
               style={{ width: '24px', height: '24px', objectFit: 'contain', opacity: 0.9 }}
             />

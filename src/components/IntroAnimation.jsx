@@ -149,7 +149,7 @@ export default function IntroAnimation({ onComplete }) {
         {/* Scene 5: Final Frame / Institution branding */}
         <div className={`intro-powered-wrap ${phase >= 4 ? 'phase-visible' : ''}`}>
           <img
-            src="/images/sdmit_logo_white.png"
+            src="/images/sdmit_logo_white.png?v=2"
             alt="SDMIT Emblem"
             style={{ width: '30px', height: '30px', objectFit: 'contain', opacity: 0.9 }}
           />

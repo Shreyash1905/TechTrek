@@ -63,7 +63,7 @@ export default function LandingPage({ onNavigate3D }) {
           <div className="brand-group" onClick={scrollToTop} role="button" tabIndex={0}>
             <div className="brand-logo-frame">
               <img
-                src="/images/sdmit_logo_white.png"
+                src="/images/sdmit_logo_white.png?v=2"
                 alt="SDMIT Emblem"
                 className="brand-logo-img"
               />
@@ -369,7 +369,7 @@ export default function LandingPage({ onNavigate3D }) {
               </p>
               <div className="map-image-container">
                 <img
-                  src="/images/sdmit_2d_map.jpg"
+                  src="/images/sdmit_2d_map.jpg?v=2"
                   alt="SDMIT Campus 2D Layout & Floor Map"
                   className="map-image"
                 />
@@ -378,7 +378,7 @@ export default function LandingPage({ onNavigate3D }) {
 
             <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <a
-                href="/images/sdmit_2d_map.jpg"
+                href="/images/sdmit_2d_map.jpg?v=2"
                 target="_blank"
                 rel="noreferrer"
                 className="btn-modal-link"
@@ -402,7 +402,7 @@ export default function LandingPage({ onNavigate3D }) {
           <div className="footer-col-main">
             <div className="footer-brand-wrap" style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '8px' }}>
               <img
-                src="/images/sdmit_logo_white.png"
+                src="/images/sdmit_logo_white.png?v=2"
                 alt="SDMIT Emblem"
                 style={{ width: '38px', height: '38px', objectFit: 'contain', opacity: 0.95 }}
               />

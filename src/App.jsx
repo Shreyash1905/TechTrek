@@ -96,7 +96,7 @@ export default function App() {
               </p>
               <div className="map-image-container">
                 <img
-                  src="/images/sdmit_2d_map.jpg"
+                  src="/images/sdmit_2d_map.jpg?v=2"
                   alt="SDMIT Campus 2D Layout & Floor Map"
                   className="map-image"
                 />
@@ -105,7 +105,7 @@ export default function App() {
 
             <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <a
-                href="/images/sdmit_2d_map.jpg"
+                href="/images/sdmit_2d_map.jpg?v=2"
                 target="_blank"
                 rel="noreferrer"
                 className="btn-modal-link"
