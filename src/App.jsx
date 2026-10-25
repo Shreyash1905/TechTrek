@@ -103,7 +103,16 @@ export default function App() {
               </div>
             </div>
 
-            <div className="modal-footer">
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <a
+                href="/images/sdmit_2d_map.jpg"
+                target="_blank"
+                rel="noreferrer"
+                className="btn-modal-link"
+                style={{ fontSize: '12px', color: 'var(--gold-primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}
+              >
+                Open Full Resolution ↗
+              </a>
               <button
                 className="btn-modal-close"
                 onClick={() => setMap2DModalOpenFrom3D(false)}

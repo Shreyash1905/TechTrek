@@ -162,7 +162,7 @@ export default function LandingPage({ onNavigate3D }) {
           <div className="event-info-matrix animate-hero-5">
             <div className="matrix-chip">
               <span className="matrix-label">DATE</span>
-              <span className="matrix-val">30/10/2026</span>
+              <span className="matrix-val">29/10/2026</span>
             </div>
             <div className="matrix-chip">
               <span className="matrix-label">VENUE</span>
@@ -376,7 +376,16 @@ export default function LandingPage({ onNavigate3D }) {
               </div>
             </div>
 
-            <div className="modal-footer">
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <a
+                href="/images/sdmit_2d_map.jpg"
+                target="_blank"
+                rel="noreferrer"
+                className="btn-modal-link"
+                style={{ fontSize: '12px', color: 'var(--gold-primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}
+              >
+                Open Full Resolution ↗
+              </a>
               <button className="btn-modal-close" onClick={() => setMap2DModalOpen(false)}>
                 Close Map
               </button>
@@ -391,8 +400,17 @@ export default function LandingPage({ onNavigate3D }) {
       <footer className="site-footer" data-reveal>
         <div className="footer-content">
           <div className="footer-col-main">
-            <span className="footer-society">SDM EDUCATIONAL SOCIETY (R)</span>
-            <strong className="footer-inst">SDM INSTITUTE OF TECHNOLOGY</strong>
+            <div className="footer-brand-wrap" style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '8px' }}>
+              <img
+                src="/images/sdmit_logo_white.png"
+                alt="SDMIT Emblem"
+                style={{ width: '38px', height: '38px', objectFit: 'contain', opacity: 0.95 }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span className="footer-society">SDM EDUCATIONAL SOCIETY (R)</span>
+                <strong className="footer-inst">SDM INSTITUTE OF TECHNOLOGY</strong>
+              </div>
+            </div>
             <span className="footer-affiliation">
               Approved by AICTE, New Delhi · Affiliated to VTU, Belagavi · Ujire, Karnataka
             </span>

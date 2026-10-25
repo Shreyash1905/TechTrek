@@ -148,7 +148,11 @@ export default function IntroAnimation({ onComplete }) {
 
         {/* Scene 5: Final Frame / Institution branding */}
         <div className={`intro-powered-wrap ${phase >= 4 ? 'phase-visible' : ''}`}>
-          <span className="powered-stem" aria-hidden="true" />
+          <img
+            src="/images/sdmit_logo_white.png"
+            alt="SDMIT Emblem"
+            style={{ width: '30px', height: '30px', objectFit: 'contain', opacity: 0.9 }}
+          />
           <span className="powered-text">POWERED BY SDMIT</span>
         </div>
       </div>

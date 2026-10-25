@@ -256,8 +256,15 @@ export default function CampusViewer3D({ onNavigateHome, onOpen2DMap }) {
           </button>
 
           <div className="viewer-page-title-group">
-            <span className="viewer-page-badge">SPARDHAM 2026</span>
-            <span className="viewer-page-title">SDMIT 3D CAMPUS</span>
+            <img
+              src="/images/sdmit_logo_white.png"
+              alt="SDMIT Emblem"
+              style={{ width: '24px', height: '24px', objectFit: 'contain', opacity: 0.9 }}
+            />
+            <div className="viewer-title-subgroup">
+              <span className="viewer-page-badge">SPARDHAM 2026</span>
+              <span className="viewer-page-title">SDMIT 3D CAMPUS</span>
+            </div>
           </div>
 
           <div className="viewer-page-actions">

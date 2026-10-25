@@ -796,9 +796,15 @@ img { max-width: 100%; display: block; }
 
 .viewer-page-title-group {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  text-align: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.viewer-title-subgroup {
+  display: flex;
+  flex-direction: column;
 }
 
 @media (max-width: 680px) {
