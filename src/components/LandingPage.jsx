@@ -369,7 +369,7 @@ export default function LandingPage({ onNavigate3D }) {
               </p>
               <div className="map-image-container">
                 <img
-                  src="/images/sdmit_2d_map.jpg?v=2"
+                  src="/images/sdmit_2d_map.jpg?v=3"
                   alt="SDMIT Campus 2D Layout & Floor Map"
                   className="map-image"
                 />
@@ -378,7 +378,7 @@ export default function LandingPage({ onNavigate3D }) {
 
             <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <a
-                href="/images/sdmit_2d_map.jpg?v=2"
+                href="/images/sdmit_2d_map.jpg?v=3"
                 target="_blank"
                 rel="noreferrer"
                 className="btn-modal-link"
