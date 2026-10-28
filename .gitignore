@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local event storage & secrets (DO NOT COMMIT)
+data/
+.backup/
+.env
+.env.local
+.env.*.local

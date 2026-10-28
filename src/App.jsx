@@ -2,10 +2,16 @@ import React, { useEffect, useState } from 'react';
 import LandingPage from './components/LandingPage.jsx';
 import CampusViewer3D from './components/CampusViewer3D.jsx';
 import IntroAnimation from './components/IntroAnimation.jsx';
+import AdminLogin from './components/admin/AdminLogin.jsx';
+import AdminDashboard from './components/admin/AdminDashboard.jsx';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(() => {
     return window.location.pathname;
+  });
+
+  const [adminToken, setAdminToken] = useState(() => {
+    return localStorage.getItem('techtrek_admin_token') || '';
   });
 
   const [map2DModalOpenFrom3D, setMap2DModalOpenFrom3D] = useState(false);
@@ -16,7 +22,7 @@ export default function App() {
       if (typeof window !== 'undefined') {
         const hasPlayed = sessionStorage.getItem('spardham_intro_played');
         if (hasPlayed === 'true') return false;
-        if (window.location.pathname === '/3d-campus') return false;
+        if (window.location.pathname === '/3d-campus' || window.location.pathname === '/admin') return false;
         if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
         return true;
       }
@@ -52,7 +58,53 @@ export default function App() {
     setShowIntro(false);
   };
 
+  const isAdminPage = currentPath === '/admin';
   const is3DPage = currentPath === '/3d-campus';
+
+  const [adminAuthChecked, setAdminAuthChecked] = useState(() => {
+    return !localStorage.getItem('techtrek_admin_token');
+  });
+  const [adminMustChangePw, setAdminMustChangePw] = useState(false);
+
+  // Validate admin token against backend on mount
+  useEffect(() => {
+    if (isAdminPage && adminToken) {
+      fetch('/api/admin/me', {
+        headers: { 'x-admin-token': adminToken },
+      })
+        .then((res) => {
+          if (!res.ok) {
+            localStorage.removeItem('techtrek_admin_token');
+            setAdminToken('');
+            setAdminMustChangePw(false);
+            return null;
+          }
+          return res.json();
+        })
+        .then((data) => {
+          if (data && data.success) {
+            setAdminMustChangePw(Boolean(data.mustChangePassword));
+          }
+        })
+        .catch(() => {
+          localStorage.removeItem('techtrek_admin_token');
+          setAdminToken('');
+          setAdminMustChangePw(false);
+        })
+        .finally(() => {
+          setAdminAuthChecked(true);
+        });
+    } else {
+      setAdminAuthChecked(true);
+    }
+  }, [isAdminPage, adminToken]);
+
+  const handleAdminLogout = () => {
+    localStorage.removeItem('techtrek_admin_token');
+    setAdminToken('');
+    setAdminMustChangePw(false);
+    setAdminAuthChecked(true);
+  };
 
   return (
     <>
@@ -61,7 +113,33 @@ export default function App() {
         <IntroAnimation onComplete={handleIntroComplete} />
       )}
 
-      {is3DPage ? (
+      {isAdminPage ? (
+        !adminAuthChecked ? (
+          <div style={{ minHeight: '100vh', background: '#0b1118', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c9a96e' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div className="spin" style={{ width: '32px', height: '32px', border: '3px solid rgba(201,169,110,0.2)', borderTopColor: '#c9a96e', borderRadius: '50%', margin: '0 auto 16px' }} />
+              <span style={{ fontSize: '13px', letterSpacing: '0.1em' }}>VERIFYING CREDENTIALS…</span>
+            </div>
+          </div>
+        ) : adminToken && !adminMustChangePw ? (
+          <AdminDashboard
+            token={adminToken}
+            onLogout={handleAdminLogout}
+            onNavigateHome={() => navigate('/')}
+          />
+        ) : (
+          <AdminLogin
+            initialMustChangePassword={adminMustChangePw}
+            initialToken={adminToken}
+            onLoginSuccess={({ token }) => {
+              setAdminToken(token);
+              setAdminMustChangePw(false);
+              setAdminAuthChecked(true);
+            }}
+            onNavigateHome={() => navigate('/')}
+          />
+        )
+      ) : is3DPage ? (
         <CampusViewer3D
           onNavigateHome={() => navigate('/')}
           onOpen2DMap={() => setMap2DModalOpenFrom3D(true)}
@@ -69,6 +147,7 @@ export default function App() {
       ) : (
         <LandingPage
           onNavigate3D={() => navigate('/3d-campus')}
+          onNavigateAdmin={() => navigate('/admin')}
         />
       )}
 

@@ -9,9 +9,11 @@ import {
   Layers,
   ChevronRight,
   Info,
+  Shield,
 } from 'lucide-react';
+import ParticipantPortalModal from './participant/ParticipantPortalModal.jsx';
 
-export default function LandingPage({ onNavigate3D }) {
+export default function LandingPage({ onNavigate3D, onNavigateAdmin }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [map2DModalOpen, setMap2DModalOpen] = useState(false);
@@ -282,66 +284,12 @@ export default function LandingPage({ onNavigate3D }) {
       </section>
 
       {/* ════════════════════════════════════════════════════════════════════
-          MODAL 1: LOGIN & PLAY
+          MODAL 1: LOGIN & PLAY (Functional Participant Portal)
       ═════════════════════════════════════════════════════════════════════ */}
-      {loginModalOpen && (
-        <div className="modal-backdrop" onClick={() => setLoginModalOpen(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-wrap">
-                <span className="modal-badge">SPARDHAM 2026</span>
-                <h3 className="modal-heading">Player & Team Access</h3>
-              </div>
-              <button
-                className="modal-close-btn"
-                onClick={() => setLoginModalOpen(false)}
-                aria-label="Close modal"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="info-callout">
-                <Info size={18} className="info-icon" />
-                <p>
-                  Team credentials and decryptor tokens are issued by event coordinators upon physical check-in at the Main Academic Block on competition day.
-                </p>
-              </div>
-
-              <div className="form-group-dummy">
-                <label className="input-label">TEAM REGISTRATION ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. TT-SPARDHAM-2026"
-                  disabled
-                  className="modal-input"
-                />
-              </div>
-
-              <div className="form-group-dummy">
-                <label className="input-label">PASSCODE / ACCESS KEY</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  disabled
-                  className="modal-input"
-                />
-              </div>
-
-              <p className="modal-note">
-                Online registration validation is handled at the coordinator control desk. Check back once your team is verified.
-              </p>
-            </div>
-
-            <div className="modal-footer">
-              <button className="btn-modal-close" onClick={() => setLoginModalOpen(false)}>
-                Back to Site
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ParticipantPortalModal
+        isOpen={loginModalOpen}
+        onClose={() => setLoginModalOpen(false)}
+      />
 
       {/* ════════════════════════════════════════════════════════════════════
           MODAL 2: 2D ARCHITECTURAL MAP
@@ -418,6 +366,26 @@ export default function LandingPage({ onNavigate3D }) {
           <div className="footer-col-side">
             <span className="footer-event-tag">SPARDHAM 2026 // TECH TREK</span>
             <span className="footer-copyright">© 2026 SDMIT. All rights reserved.</span>
+            {onNavigateAdmin && (
+              <button
+                type="button"
+                onClick={onNavigateAdmin}
+                className="footer-admin-link"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  textAlign: 'right',
+                  marginTop: '4px',
+                  textDecoration: 'underline',
+                  opacity: 0.8,
+                }}
+              >
+                Coordinator Portal (/admin)
+              </button>
+            )}
           </div>
         </div>
       </footer>
