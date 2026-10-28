@@ -232,22 +232,82 @@ router.post('/register', requireParticipant, async (req, res) => {
 });
 
 /**
- * STEP 4: Retrieve Current Authorized Hint
+ * Helper to get an authenticated team's ordered, published hints and route info.
+ * Enforces team-specific route scoping. Falls back to global hints only if no team route exists,
+ * preserving existing behavior without exposing draft/other teams' hints.
+ */
+function getTeamOrderedHints(eventState, teamId) {
+  const teamRoutes = eventState.teamRoutes || {};
+  const route = teamRoutes[teamId];
+
+  // If a team-specific route exists
+  if (route) {
+    if (route.status !== 'published') {
+      return {
+        hasRoute: true,
+        routePublished: false,
+        route,
+        publishedHints: [],
+        allHints: [],
+      };
+    }
+
+    const hintMap = new Map((eventState.hints || []).map((h) => [h.id, h]));
+    const routeHintIds = route.hintIds || [];
+
+    // Filter hints belonging to this route in specified order
+    const orderedTeamHints = routeHintIds
+      .map((id) => hintMap.get(id))
+      .filter(Boolean);
+
+    const publishedHints = orderedTeamHints.filter((h) => h.status === 'published');
+
+    return {
+      hasRoute: true,
+      routePublished: true,
+      route,
+      publishedHints,
+      allHints: orderedTeamHints,
+    };
+  }
+
+  // Fallback if no team route defined: use legacy global hints for backwards compatibility
+  const globalPublished = (eventState.hints || [])
+    .filter((h) => h.status === 'published' && (!h.teamId || h.teamId === teamId))
+    .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+  return {
+    hasRoute: false,
+    routePublished: true,
+    route: null,
+    publishedHints: globalPublished,
+    allHints: eventState.hints || [],
+  };
+}
+
+/**
+ * STEP 4: Retrieve Current Authorized Hint for Authenticated Team
  */
 router.get('/hint', requireParticipant, async (req, res) => {
   const eventState = await getEventState();
-  const publishedHints = (eventState.hints || [])
-    .filter((h) => h.status === 'published')
-    .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-
   const team = eventState.teams.find((t) => t.id === req.team.id) || req.team;
   const currentIndex = team.currentHintIndex || 0;
+
+  const { hasRoute, routePublished, route, publishedHints } = getTeamOrderedHints(eventState, team.id);
+
+  if (hasRoute && !routePublished) {
+    return res.json({
+      success: true,
+      hasHints: false,
+      message: 'Your team route is currently in preparation. Coordinators will publish your mission sequence shortly!',
+    });
+  }
 
   if (publishedHints.length === 0) {
     return res.json({
       success: true,
       hasHints: false,
-      message: 'No clues have been published for the treasure hunt yet. Check back once the event commences!',
+      message: 'No clues have been published for your team yet. Check back once coordinators release your mission clues!',
     });
   }
 
@@ -257,7 +317,10 @@ router.get('/hint', requireParticipant, async (req, res) => {
       hasHints: true,
       finished: true,
       totalHints: publishedHints.length,
-      message: "You've reached the final available hint! Stay sharp, think logically, and find the campus treasure!",
+      finalDestination: route?.finalDestination || null,
+      message: route?.finalDestination
+        ? `You have conquered all clues! Final Destination: ${route.finalDestination}`
+        : "You've reached the final available clue! Stay sharp, think logically, and find the campus treasure!",
     });
   }
 
@@ -285,11 +348,13 @@ router.get('/hint', requireParticipant, async (req, res) => {
     teamName: team.teamName || `Slot ${team.slotNumber}`,
     totalHints: publishedHints.length,
     currentHintNumber: currentIndex + 1,
+    routeName: route?.routeName || null,
+    finalDestination: route?.finalDestination || null,
     hint: {
       id: activeHint.id,
       title: activeHint.title,
       content: activeHint.content,
-      sequenceNumber: activeHint.sequenceNumber,
+      sequenceNumber: currentIndex + 1,
       requiresCheckpoint,
       checkpointName,
       isCheckpointCompleted,
@@ -299,17 +364,23 @@ router.get('/hint', requireParticipant, async (req, res) => {
 });
 
 /**
- * STEP 4b: Advance to the Next Hint
+ * STEP 4b: Advance to the Next Hint for Authenticated Team
  */
 router.post('/next-hint', requireParticipant, async (req, res) => {
   const eventState = await getEventState();
-  const publishedHints = (eventState.hints || [])
-    .filter((h) => h.status === 'published')
-    .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-
   const team = eventState.teams.find((t) => t.id === req.team.id);
   if (!team) {
     return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND' });
+  }
+
+  const { hasRoute, routePublished, route, publishedHints } = getTeamOrderedHints(eventState, team.id);
+
+  if (hasRoute && !routePublished) {
+    return res.status(403).json({
+      success: false,
+      error: 'ROUTE_NOT_PUBLISHED',
+      message: 'Your route is not yet published by event coordinators.',
+    });
   }
 
   const currentIndex = team.currentHintIndex || 0;
@@ -318,7 +389,7 @@ router.post('/next-hint', requireParticipant, async (req, res) => {
     return res.json({
       success: true,
       finished: true,
-      message: "You've already viewed all available clues!",
+      message: "You've already viewed all available clues for your route!",
     });
   }
 
@@ -362,13 +433,13 @@ router.post('/next-hint', requireParticipant, async (req, res) => {
     newHintIndex: nextIndex,
     finished: nextIndex >= publishedHints.length,
     message: nextIndex >= publishedHints.length
-      ? "You've unlocked the final stage clue!"
+      ? (route?.finalDestination ? `All clues finished! Report to: ${route.finalDestination}` : "You've unlocked the final stage clue!")
       : 'Clue unlocked! Follow the lead.',
   });
 });
 
 /**
- * STEP 4c: Checkpoint Code / QR Verification
+ * STEP 4c: Checkpoint Code / QR Verification Scoped to Team Route
  */
 router.post('/verify-checkpoint', requireParticipant, async (req, res) => {
   const { code } = req.body;
@@ -416,7 +487,7 @@ router.post('/verify-checkpoint', requireParticipant, async (req, res) => {
     });
   }
 
-  // Record completion & auto-progress hint if currently on this checkpoint's clue
+  // Record completion & auto-progress hint if currently on this checkpoint's clue for this team's route
   await updateEventState((state) => {
     const slot = state.teams.find((t) => t.id === team.id);
     if (slot) {
@@ -424,10 +495,8 @@ router.post('/verify-checkpoint', requireParticipant, async (req, res) => {
       slot.completedCheckpoints.push(checkpoint.id);
       slot.lastActivityAt = new Date().toISOString();
 
-      // Check if current hint matches this checkpoint
-      const publishedHints = (state.hints || [])
-        .filter((h) => h.status === 'published')
-        .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+      // Check if this team's current hint requires this checkpoint
+      const { publishedHints } = getTeamOrderedHints(state, team.id);
       const curHint = publishedHints[slot.currentHintIndex || 0];
 
       if (curHint && curHint.checkpointId === checkpoint.id) {

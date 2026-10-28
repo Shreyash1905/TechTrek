@@ -732,6 +732,10 @@ router.post('/teams/delete', requireAdmin, async (req, res) => {
       s.lastActivityAt = null;
       s.sessionTokenHash = null;
     }
+    // Clean up team route assignment if exists
+    if (state.teamRoutes && state.teamRoutes[slotId]) {
+      delete state.teamRoutes[slotId];
+    }
     return state;
   });
 
@@ -924,6 +928,406 @@ router.post('/hints/:id/publish', requireAdmin, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Team Routes & Route Hints Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get all team routes or route for a specific team
+ */
+router.get('/routes', requireAdmin, async (req, res) => {
+  const eventState = await getEventState();
+  const teamRoutes = eventState.teamRoutes || {};
+  const teams = eventState.teams || [];
+  const hints = eventState.hints || [];
+  const checkpoints = eventState.checkpoints || [];
+
+  const hintMap = new Map(hints.map((h) => [h.id, h]));
+  const checkpointMap = new Map(checkpoints.map((c) => [c.id, c]));
+
+  // Build route view for each team slot
+  const routes = teams.map((team) => {
+    const route = teamRoutes[team.id] || {
+      teamId: team.id,
+      routeName: `Route for Slot #${team.slotNumber}`,
+      status: 'draft',
+      finalDestination: '',
+      hintIds: [],
+      checkpointIds: [],
+      createdAt: null,
+      updatedAt: null,
+    };
+
+    const routeHints = (route.hintIds || [])
+      .map((id, idx) => {
+        const h = hintMap.get(id);
+        if (!h) return null;
+        return {
+          ...h,
+          sequenceNumber: idx + 1,
+          checkpointName: h.checkpointId ? checkpointMap.get(h.checkpointId)?.name : null,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      teamId: team.id,
+      slotNumber: team.slotNumber,
+      teamName: team.teamName,
+      status: route.status || 'draft',
+      routeName: route.routeName || `Route for Slot #${team.slotNumber}`,
+      finalDestination: route.finalDestination || '',
+      hintIds: route.hintIds || [],
+      checkpointIds: route.checkpointIds || [],
+      hintsCount: routeHints.length,
+      publishedHintsCount: routeHints.filter((h) => h.status === 'published').length,
+      currentProgress: {
+        currentHintIndex: team.currentHintIndex || 0,
+        completedCheckpointsCount: (team.completedCheckpoints || []).length,
+      },
+      hints: routeHints,
+    };
+  });
+
+  res.json({
+    success: true,
+    routes,
+    allHints: hints,
+    allCheckpoints: checkpoints,
+  });
+});
+
+/**
+ * Get specific team route details
+ */
+router.get('/routes/:teamId', requireAdmin, async (req, res) => {
+  const { teamId } = req.params;
+  const eventState = await getEventState();
+  const team = (eventState.teams || []).find((t) => t.id === teamId);
+
+  if (!team) {
+    return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND', message: 'Team slot not found.' });
+  }
+
+  const route = (eventState.teamRoutes || {})[teamId] || {
+    teamId: team.id,
+    routeName: `Route for Slot #${team.slotNumber}`,
+    status: 'draft',
+    finalDestination: '',
+    hintIds: [],
+    checkpointIds: [],
+  };
+
+  const hintMap = new Map((eventState.hints || []).map((h) => [h.id, h]));
+  const checkpointMap = new Map((eventState.checkpoints || []).map((c) => [c.id, c]));
+
+  const routeHints = (route.hintIds || [])
+    .map((id, idx) => {
+      const h = hintMap.get(id);
+      if (!h) return null;
+      return {
+        ...h,
+        sequenceNumber: idx + 1,
+        checkpointName: h.checkpointId ? checkpointMap.get(h.checkpointId)?.name : null,
+      };
+    })
+    .filter(Boolean);
+
+  res.json({
+    success: true,
+    team: {
+      id: team.id,
+      slotNumber: team.slotNumber,
+      teamName: team.teamName,
+      currentHintIndex: team.currentHintIndex || 0,
+      completedCheckpoints: team.completedCheckpoints || [],
+    },
+    route: {
+      ...route,
+      hints: routeHints,
+    },
+    checkpoints: eventState.checkpoints || [],
+  });
+});
+
+/**
+ * Save / Update a Team Route (name, final destination, status, ordered hint IDs)
+ */
+router.put('/routes/:teamId', requireAdmin, async (req, res) => {
+  const { teamId } = req.params;
+  const { routeName, status, finalDestination, hintIds } = req.body;
+
+  const eventState = await getEventState();
+  const team = (eventState.teams || []).find((t) => t.id === teamId);
+
+  if (!team) {
+    return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND', message: 'Team slot not found.' });
+  }
+
+  let updatedRoute = null;
+
+  await updateEventState((state) => {
+    state.teamRoutes = state.teamRoutes || {};
+    const existing = state.teamRoutes[teamId] || {
+      teamId,
+      createdAt: new Date().toISOString(),
+    };
+
+    const cleanHintIds = Array.isArray(hintIds) ? hintIds.filter(Boolean) : (existing.hintIds || []);
+    
+    // Compute associated checkpoint IDs in sequence
+    const hintMap = new Map((state.hints || []).map((h) => [h.id, h]));
+    const derivedCpIds = cleanHintIds
+      .map((hid) => hintMap.get(hid)?.checkpointId)
+      .filter(Boolean);
+
+    updatedRoute = {
+      ...existing,
+      teamId,
+      routeName: routeName !== undefined ? routeName.trim() : (existing.routeName || `Route for Slot #${team.slotNumber}`),
+      status: status === 'published' ? 'published' : 'draft',
+      finalDestination: finalDestination !== undefined ? finalDestination.trim() : (existing.finalDestination || ''),
+      hintIds: cleanHintIds,
+      checkpointIds: derivedCpIds,
+      updatedAt: new Date().toISOString(),
+    };
+
+    state.teamRoutes[teamId] = updatedRoute;
+    return state;
+  });
+
+  await addAuditLog({
+    eventType: 'ROUTE_UPDATED',
+    actorType: 'administrator',
+    teamId,
+    status: 'success',
+    details: `Updated route for Slot #${team.slotNumber} (${team.teamName || 'Unregistered'}): ${updatedRoute.status.toUpperCase()}, ${updatedRoute.hintIds.length} clues.`,
+  });
+
+  res.json({ success: true, route: updatedRoute });
+});
+
+/**
+ * Create a new Hint directly assigned to a Team's Route
+ */
+router.post('/routes/:teamId/hints', requireAdmin, async (req, res) => {
+  const { teamId } = req.params;
+  const { title, content, checkpointId, status } = req.body;
+
+  if (!title || !content) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Title and content are required.' });
+  }
+
+  const eventState = await getEventState();
+  const team = (eventState.teams || []).find((t) => t.id === teamId);
+  if (!team) {
+    return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND' });
+  }
+
+  const newHintId = `hint-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const existingRoute = (eventState.teamRoutes || {})[teamId] || { hintIds: [] };
+  const nextSeq = (existingRoute.hintIds || []).length + 1;
+
+  const newHint = {
+    id: newHintId,
+    teamId,
+    title: title.trim(),
+    content: content.trim(),
+    sequenceNumber: nextSeq,
+    status: status === 'published' ? 'published' : 'draft',
+    checkpointId: checkpointId || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await updateEventState((state) => {
+    state.hints = state.hints || [];
+    state.hints.push(newHint);
+
+    state.teamRoutes = state.teamRoutes || {};
+    const route = state.teamRoutes[teamId] || {
+      teamId,
+      routeName: `Route for Slot #${team.slotNumber}`,
+      status: 'draft',
+      finalDestination: '',
+      hintIds: [],
+      checkpointIds: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    route.hintIds = route.hintIds || [];
+    route.hintIds.push(newHintId);
+    if (newHint.checkpointId && !route.checkpointIds?.includes(newHint.checkpointId)) {
+      route.checkpointIds = route.checkpointIds || [];
+      route.checkpointIds.push(newHint.checkpointId);
+    }
+    route.updatedAt = new Date().toISOString();
+
+    state.teamRoutes[teamId] = route;
+    return state;
+  });
+
+  await addAuditLog({
+    eventType: 'ROUTE_HINT_CREATED',
+    actorType: 'administrator',
+    teamId,
+    status: 'success',
+    details: `Added Hint #${nextSeq} ("${newHint.title}") to Slot #${team.slotNumber} route.`,
+  });
+
+  res.json({ success: true, hint: newHint });
+});
+
+/**
+ * Reorder Hints within a Team's Route
+ */
+router.post('/routes/:teamId/reorder', requireAdmin, async (req, res) => {
+  const { teamId } = req.params;
+  const { orderedHintIds } = req.body;
+
+  if (!Array.isArray(orderedHintIds)) {
+    return res.status(400).json({ success: false, error: 'INVALID_DATA', message: 'orderedHintIds array is required.' });
+  }
+
+  const eventState = await getEventState();
+  const team = (eventState.teams || []).find((t) => t.id === teamId);
+  if (!team) {
+    return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND' });
+  }
+
+  await updateEventState((state) => {
+    state.teamRoutes = state.teamRoutes || {};
+    const route = state.teamRoutes[teamId] || {
+      teamId,
+      routeName: `Route for Slot #${team.slotNumber}`,
+      status: 'draft',
+      finalDestination: '',
+      hintIds: [],
+      checkpointIds: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    route.hintIds = orderedHintIds;
+    
+    // Update checkpoint sequence according to new hint order
+    const hintMap = new Map((state.hints || []).map((h) => [h.id, h]));
+    route.checkpointIds = orderedHintIds
+      .map((hid) => hintMap.get(hid)?.checkpointId)
+      .filter(Boolean);
+    route.updatedAt = new Date().toISOString();
+
+    state.teamRoutes[teamId] = route;
+    return state;
+  });
+
+  await addAuditLog({
+    eventType: 'ROUTE_REORDERED',
+    actorType: 'administrator',
+    teamId,
+    status: 'success',
+    details: `Reordered hints for Slot #${team.slotNumber} route.`,
+  });
+
+  res.json({ success: true, message: 'Route hint sequence updated.' });
+});
+
+/**
+ * Delete a Hint from a Team's Route (and from hints array)
+ */
+router.delete('/routes/:teamId/hints/:hintId', requireAdmin, async (req, res) => {
+  const { teamId, hintId } = req.params;
+
+  let deletedHint = null;
+
+  await updateEventState((state) => {
+    // Remove from global hints list
+    const hIdx = (state.hints || []).findIndex((h) => h.id === hintId);
+    if (hIdx !== -1) {
+      deletedHint = state.hints.splice(hIdx, 1)[0];
+    }
+
+    // Remove from team route
+    if (state.teamRoutes && state.teamRoutes[teamId]) {
+      const route = state.teamRoutes[teamId];
+      route.hintIds = (route.hintIds || []).filter((id) => id !== hintId);
+      route.checkpointIds = (route.checkpointIds || []).filter((id) => id !== deletedHint?.checkpointId);
+      route.updatedAt = new Date().toISOString();
+    }
+    return state;
+  });
+
+  if (!deletedHint) {
+    return res.status(404).json({ success: false, error: 'HINT_NOT_FOUND' });
+  }
+
+  await addAuditLog({
+    eventType: 'ROUTE_HINT_DELETED',
+    actorType: 'administrator',
+    teamId,
+    status: 'success',
+    details: `Deleted clue "${deletedHint.title}" from Slot ${teamId} route.`,
+  });
+
+  res.json({ success: true, message: 'Clue deleted from route.' });
+});
+
+/**
+ * Assign / Copy existing hints into a team's route (migration tool)
+ */
+router.post('/routes/:teamId/assign-existing', requireAdmin, async (req, res) => {
+  const { teamId } = req.params;
+  const { hintIds } = req.body;
+
+  if (!Array.isArray(hintIds)) {
+    return res.status(400).json({ success: false, error: 'INVALID_DATA' });
+  }
+
+  const eventState = await getEventState();
+  const team = (eventState.teams || []).find((t) => t.id === teamId);
+  if (!team) {
+    return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND' });
+  }
+
+  await updateEventState((state) => {
+    state.teamRoutes = state.teamRoutes || {};
+    const route = state.teamRoutes[teamId] || {
+      teamId,
+      routeName: `Route for Slot #${team.slotNumber}`,
+      status: 'draft',
+      finalDestination: '',
+      hintIds: [],
+      checkpointIds: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    // Add without duplicating
+    hintIds.forEach((hid) => {
+      if (!route.hintIds.includes(hid)) {
+        route.hintIds.push(hid);
+      }
+    });
+
+    const hintMap = new Map((state.hints || []).map((h) => [h.id, h]));
+    route.checkpointIds = route.hintIds
+      .map((hid) => hintMap.get(hid)?.checkpointId)
+      .filter(Boolean);
+    route.updatedAt = new Date().toISOString();
+
+    state.teamRoutes[teamId] = route;
+    return state;
+  });
+
+  await addAuditLog({
+    eventType: 'ROUTE_HINTS_ASSIGNED',
+    actorType: 'administrator',
+    teamId,
+    status: 'success',
+    details: `Assigned ${hintIds.length} existing clues to Slot #${team.slotNumber} route.`,
+  });
+
+  res.json({ success: true, message: 'Clues assigned to team route.' });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Checkpoints Management
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -953,6 +1357,16 @@ router.post('/checkpoints', requireAdmin, async (req, res) => {
 
   const code = (customCode && customCode.trim().toUpperCase()) || generateCheckpointCode();
   const token = `ck-token-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const eventState = await getEventState();
+  const existingWithCode = (eventState.checkpoints || []).find((c) => c.isActive && c.code.toUpperCase() === code);
+  if (existingWithCode) {
+    return res.status(400).json({
+      success: false,
+      error: 'DUPLICATE_CODE',
+      message: `Checkpoint code "${code}" is already assigned to active checkpoint "${existingWithCode.name}".`,
+    });
+  }
 
   const newCheckpoint = {
     id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,

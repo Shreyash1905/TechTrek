@@ -28,6 +28,9 @@ import {
   Lock,
   Search,
   Loader2,
+  Route,
+  Milestone,
+  Flag,
 } from 'lucide-react';
 
 export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
@@ -44,6 +47,16 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
   const [settingsData, setSettingsData] = useState(null);
   const [logsData, setLogsData] = useState([]);
   const [logsPagination, setLogsPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+
+  // Team Routes data states
+  const [routesData, setRoutesData] = useState([]);
+  const [selectedRouteTeamId, setSelectedRouteTeamId] = useState('');
+  const [routeDetail, setRouteDetail] = useState(null);
+  const [routeSaving, setRouteSaving] = useState(false);
+  const [previewRouteModal, setPreviewRouteModal] = useState(null);
+  const [routeHintModal, setRouteHintModal] = useState(null);
+  const [assignExistingModal, setAssignExistingModal] = useState(false);
+  const [selectedExistingHintIds, setSelectedExistingHintIds] = useState([]);
 
   // Dialog & Modal states
   const [newKeyModal, setNewKeyModal] = useState(null);
@@ -160,6 +173,24 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
         const tData = await teamsRes.json();
         if (cData.success) setCheckpointsData(cData.checkpoints);
         if (tData.success) setTeamsData(tData.teams);
+      } else if (tab === 'routes') {
+        const [routesRes, cpRes, hintsRes] = await Promise.all([
+          adminFetch('/api/admin/routes'),
+          adminFetch('/api/admin/checkpoints'),
+          adminFetch('/api/admin/hints'),
+        ]);
+        if (!routesRes || !cpRes || !hintsRes) return;
+        const rData = await routesRes.json();
+        const cData = await cpRes.json();
+        const hData = await hintsRes.json();
+        if (rData.success) {
+          setRoutesData(rData.routes || []);
+          if (rData.routes?.length > 0 && !selectedRouteTeamId) {
+            setSelectedRouteTeamId(rData.routes[0].teamId);
+          }
+        }
+        if (cData.success) setCheckpointsData(cData.checkpoints || []);
+        if (hData.success) setHintsData(hData.hints || []);
       } else if (tab === 'settings') {
         const res = await adminFetch('/api/admin/settings');
         if (!res) return;
@@ -576,6 +607,171 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
   };
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Handlers: Team Routes & Route Hints
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const handleSelectRouteTeam = (teamId) => {
+    setSelectedRouteTeamId(teamId);
+  };
+
+  const handleUpdateRouteMeta = async (teamId, patch) => {
+    try {
+      setRouteSaving(true);
+      const res = await adminFetch(`/api/admin/routes/${teamId}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast('Route updated successfully.');
+        fetchTabData('routes');
+      } else {
+        showToast(data.message || 'Failed to update route.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error saving route.', 'error');
+    } finally {
+      setRouteSaving(false);
+    }
+  };
+
+  const handleSaveRouteHint = async (e) => {
+    e.preventDefault();
+    if (!routeHintModal || !selectedRouteTeamId) return;
+    const { mode, hint } = routeHintModal;
+
+    if (!hint.title?.trim() || !hint.content?.trim()) {
+      showToast('Title and content are required.', 'error');
+      return;
+    }
+
+    try {
+      if (mode === 'create') {
+        const res = await adminFetch(`/api/admin/routes/${selectedRouteTeamId}/hints`, {
+          method: 'POST',
+          body: JSON.stringify(hint),
+        });
+        if (!res) return;
+        const data = await res.json();
+        if (data.success) {
+          showToast('Clue added to route.');
+          setRouteHintModal(null);
+          fetchTabData('routes');
+        } else {
+          showToast(data.message || 'Error adding clue.', 'error');
+        }
+      } else {
+        // Edit existing hint
+        const res = await adminFetch(`/api/admin/hints/${hint.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(hint),
+        });
+        if (!res) return;
+        const data = await res.json();
+        if (data.success) {
+          showToast('Clue updated.');
+          setRouteHintModal(null);
+          fetchTabData('routes');
+        } else {
+          showToast(data.message || 'Error updating clue.', 'error');
+        }
+      }
+    } catch (err) {
+      showToast('Network error saving clue.', 'error');
+    }
+  };
+
+  const handleDeleteRouteHint = async (hintId, hintTitle) => {
+    if (!selectedRouteTeamId) return;
+    if (!window.confirm(`Delete clue "${hintTitle}" from this team's route?`)) return;
+
+    try {
+      const res = await adminFetch(`/api/admin/routes/${selectedRouteTeamId}/hints/${hintId}`, {
+        method: 'DELETE',
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast('Clue deleted from route.');
+        fetchTabData('routes');
+      } else {
+        showToast(data.message || 'Error deleting clue.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error deleting clue.', 'error');
+    }
+  };
+
+  const handleMoveRouteHint = async (index, direction) => {
+    const selectedRoute = routesData.find((r) => r.teamId === selectedRouteTeamId);
+    if (!selectedRoute || !selectedRoute.hints) return;
+
+    const newHints = [...selectedRoute.hints];
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+
+    if (targetIndex < 0 || targetIndex >= newHints.length) return;
+
+    // Swap
+    const temp = newHints[index];
+    newHints[index] = newHints[targetIndex];
+    newHints[targetIndex] = temp;
+
+    const orderedHintIds = newHints.map((h) => h.id);
+
+    try {
+      const res = await adminFetch(`/api/admin/routes/${selectedRouteTeamId}/reorder`, {
+        method: 'POST',
+        body: JSON.stringify({ orderedHintIds }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast('Route sequence updated.');
+        fetchTabData('routes');
+      }
+    } catch (err) {
+      showToast('Failed to reorder clues.', 'error');
+    }
+  };
+
+  const handleTogglePublishRouteHint = async (hintId) => {
+    try {
+      const res = await adminFetch(`/api/admin/hints/${hintId}/publish`, {
+        method: 'POST',
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Clue status changed to ${data.status}.`);
+        fetchTabData('routes');
+      }
+    } catch (err) {
+      showToast('Error changing clue status.', 'error');
+    }
+  };
+
+  const handleAssignExistingHints = async () => {
+    if (!selectedRouteTeamId || selectedExistingHintIds.length === 0) return;
+    try {
+      const res = await adminFetch(`/api/admin/routes/${selectedRouteTeamId}/assign-existing`, {
+        method: 'POST',
+        body: JSON.stringify({ hintIds: selectedExistingHintIds }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast('Assigned selected clues to route.');
+        setAssignExistingModal(false);
+        setSelectedExistingHintIds([]);
+        fetchTabData('routes');
+      }
+    } catch (err) {
+      showToast('Error assigning clues.', 'error');
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Handlers: Settings & Password
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -722,6 +918,13 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
             >
               <FileText size={17} />
               <span>Manage Hints</span>
+            </button>
+            <button
+              className={`sidebar-nav-item ${activeTab === 'routes' ? 'active' : ''}`}
+              onClick={() => setActiveTab('routes')}
+            >
+              <Route size={17} />
+              <span>Team Routes</span>
             </button>
             <button
               className={`sidebar-nav-item ${activeTab === 'checkpoints' ? 'active' : ''}`}
@@ -1201,6 +1404,298 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                     </div>
                   ))}
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB: TEAM ROUTES & HINTS */}
+          {activeTab === 'routes' && (
+            <div className="admin-view-container">
+              <div className="view-header">
+                <div>
+                  <h2 className="view-title">Team Routes & Clues</h2>
+                  <p className="view-subtitle">Author, order, publish, and inspect independent treasure hunt sequences per team</p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => {
+                      const sel = routesData.find((r) => r.teamId === selectedRouteTeamId);
+                      if (sel) setPreviewRouteModal(sel);
+                    }}
+                    disabled={!selectedRouteTeamId || !routesData.find((r) => r.teamId === selectedRouteTeamId)?.hints?.length}
+                    className="btn-admin-action btn-subtle"
+                    title="Preview complete route as participants experience it"
+                  >
+                    <Eye size={16} />
+                    <span>Preview Route</span>
+                  </button>
+                  <button
+                    onClick={() => setAssignExistingModal(true)}
+                    disabled={!selectedRouteTeamId || hintsData.length === 0}
+                    className="btn-admin-action btn-subtle"
+                    title="Copy/assign existing global clues into this team's route"
+                  >
+                    <Copy size={16} />
+                    <span>Assign Global Clues</span>
+                  </button>
+                  <button
+                    onClick={() =>
+                      setRouteHintModal({
+                        mode: 'create',
+                        hint: { title: '', content: '', checkpointId: '', status: 'draft' },
+                      })
+                    }
+                    disabled={!selectedRouteTeamId}
+                    className="btn-admin-action"
+                  >
+                    <Plus size={16} />
+                    <span>Add Clue to Route</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Team Selector Strip */}
+              <div className="routes-team-selector-strip" style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '12px', marginBottom: '16px' }}>
+                {routesData.map((route) => {
+                  const isSelected = route.teamId === selectedRouteTeamId;
+                  return (
+                    <button
+                      key={route.teamId}
+                      onClick={() => handleSelectRouteTeam(route.teamId)}
+                      className={`route-team-pill ${isSelected ? 'active' : ''}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        border: isSelected ? '1px solid #e5a968' : '1px solid rgba(255, 255, 255, 0.1)',
+                        background: isSelected ? 'rgba(229, 169, 104, 0.14)' : 'rgba(15, 23, 42, 0.6)',
+                        color: isSelected ? '#ffffff' : '#94a3b8',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <strong style={{ color: isSelected ? '#e5a968' : '#e2e8f0' }}>Slot #{route.slotNumber}</strong>
+                      <span>{route.teamName || <i style={{ opacity: 0.6 }}>Unregistered</i>}</span>
+                      <span
+                        className={`status-pill status-${route.status}`}
+                        style={{ fontSize: '10px', padding: '2px 6px' }}
+                      >
+                        {route.status.toUpperCase()}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {loading && routesData.length === 0 ? (
+                <LoadingSpinner />
+              ) : routesData.length === 0 ? (
+                <EmptyState
+                  icon={Route}
+                  title="No Team Slots Created"
+                  description="Create team slots in the Access Keys tab before authoring routes."
+                />
+              ) : (
+                (() => {
+                  const selectedRoute = routesData.find((r) => r.teamId === selectedRouteTeamId) || routesData[0];
+                  if (!selectedRoute) return null;
+
+                  return (
+                    <div className="route-workspace-grid" style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px' }}>
+                      {/* Left: Route Configuration Card */}
+                      <div className="admin-card" style={{ height: 'fit-content' }}>
+                        <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                          <Compass size={18} />
+                          <span>Route Settings</span>
+                        </h3>
+
+                        <div className="form-group" style={{ marginBottom: '14px' }}>
+                          <label className="input-label">ASSIGNED TEAM</label>
+                          <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <strong style={{ color: '#e5a968' }}>Slot #{selectedRoute.slotNumber}</strong>
+                            <div style={{ fontSize: '13px', color: '#e2e8f0' }}>{selectedRoute.teamName || 'Unregistered Team'}</div>
+                          </div>
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '14px' }}>
+                          <label className="input-label">ROUTE NAME</label>
+                          <input
+                            type="text"
+                            value={selectedRoute.routeName || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setRoutesData((prev) =>
+                                prev.map((r) => (r.teamId === selectedRoute.teamId ? { ...r, routeName: val } : r))
+                              );
+                            }}
+                            onBlur={() => handleUpdateRouteMeta(selectedRoute.teamId, { routeName: selectedRoute.routeName })}
+                            className="modal-input"
+                            placeholder="e.g. Route Alpha — Circuit & Logic"
+                          />
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '14px' }}>
+                          <label className="input-label">PUBLICATION STATUS</label>
+                          <select
+                            value={selectedRoute.status}
+                            onChange={(e) => {
+                              const newStatus = e.target.value;
+                              setRoutesData((prev) =>
+                                prev.map((r) => (r.teamId === selectedRoute.teamId ? { ...r, status: newStatus } : r))
+                              );
+                              handleUpdateRouteMeta(selectedRoute.teamId, { status: newStatus });
+                            }}
+                            className="modal-input"
+                          >
+                            <option value="draft">Draft (Hidden from team)</option>
+                            <option value="published">Published (Live for team)</option>
+                          </select>
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '14px' }}>
+                          <label className="input-label">FINAL DESTINATION / PRIZE VAULT</label>
+                          <input
+                            type="text"
+                            value={selectedRoute.finalDestination || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setRoutesData((prev) =>
+                                prev.map((r) => (r.teamId === selectedRoute.teamId ? { ...r, finalDestination: val } : r))
+                              );
+                            }}
+                            onBlur={() => handleUpdateRouteMeta(selectedRoute.teamId, { finalDestination: selectedRoute.finalDestination })}
+                            className="modal-input"
+                            placeholder="e.g. Server Room Vault / Seminar Hall Podium"
+                          />
+                          <span className="input-note">Shown to this team upon solving all route clues.</span>
+                        </div>
+
+                        <div className="form-group" style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                          <label className="input-label">LIVE TEAM PROGRESS</label>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', color: '#94a3b8' }}>
+                            <div>Current Clue Index: <strong style={{ color: '#ffffff' }}>#{selectedRoute.currentProgress.currentHintIndex + 1}</strong></div>
+                            <div>Verified Locations: <strong style={{ color: '#ffffff' }}>{selectedRoute.currentProgress.completedCheckpointsCount}</strong></div>
+                            <div>Total Route Clues: <strong style={{ color: '#ffffff' }}>{selectedRoute.hintsCount}</strong></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Ordered Hints Sequence for this Route */}
+                      <div className="route-hints-panel">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                          <h3 style={{ fontSize: '15px', color: '#e2e8f0', margin: 0 }}>
+                            Clues Sequence ({selectedRoute.hints?.length || 0})
+                          </h3>
+                          <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                            {selectedRoute.publishedHintsCount} of {selectedRoute.hintsCount} published
+                          </span>
+                        </div>
+
+                        {selectedRoute.hints?.length === 0 ? (
+                          <div className="admin-card empty-state-card">
+                            <FileText size={36} className="empty-icon" />
+                            <h3>No Clues in this Route</h3>
+                            <p>Add fresh clues or assign existing global clues to build this team's journey.</p>
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                              <button
+                                onClick={() => setAssignExistingModal(true)}
+                                className="btn-admin-action btn-subtle"
+                              >
+                                <Copy size={14} /> Assign Existing
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setRouteHintModal({
+                                    mode: 'create',
+                                    hint: { title: '', content: '', checkpointId: '', status: 'draft' },
+                                  })
+                                }
+                                className="btn-admin-action"
+                              >
+                                <Plus size={14} /> Add New Clue
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="hints-sequence-list">
+                            {selectedRoute.hints.map((hint, idx) => (
+                              <div key={hint.id} className="hint-item-card">
+                                <div className="hint-order-col">
+                                  <button
+                                    onClick={() => handleMoveRouteHint(idx, 'up')}
+                                    disabled={idx === 0}
+                                    className="btn-arrow-order"
+                                    title="Move up in sequence"
+                                  >
+                                    <ArrowUp size={14} />
+                                  </button>
+                                  <span className="hint-seq-number">#{idx + 1}</span>
+                                  <button
+                                    onClick={() => handleMoveRouteHint(idx, 'down')}
+                                    disabled={idx === selectedRoute.hints.length - 1}
+                                    className="btn-arrow-order"
+                                    title="Move down in sequence"
+                                  >
+                                    <ArrowDown size={14} />
+                                  </button>
+                                </div>
+
+                                <div className="hint-body-col">
+                                  <div className="hint-top-meta">
+                                    <span className={`status-pill status-${hint.status}`}>
+                                      {hint.status.toUpperCase()}
+                                    </span>
+                                    {hint.checkpointId && (
+                                      <span className="checkpoint-assigned-pill">
+                                        <MapPin size={12} />
+                                        <span>{hint.checkpointName || 'Checkpoint linked'}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h4 className="hint-title-text">{hint.title}</h4>
+                                  <p className="hint-snippet-text">{hint.content}</p>
+                                </div>
+
+                                <div className="hint-actions-col">
+                                  <button
+                                    onClick={() => setPreviewHintModal(hint)}
+                                    className="btn-icon-action"
+                                    title="Preview clue"
+                                  >
+                                    <Eye size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleTogglePublishRouteHint(hint.id)}
+                                    className={`btn-table-action ${hint.status === 'published' ? 'btn-subtle' : 'btn-gold'}`}
+                                  >
+                                    {hint.status === 'published' ? 'Unpublish' : 'Publish'}
+                                  </button>
+                                  <button
+                                    onClick={() => setRouteHintModal({ mode: 'edit', hint: { ...hint } })}
+                                    className="btn-icon-action"
+                                    title="Edit clue"
+                                  >
+                                    <Edit size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteRouteHint(hint.id, hint.title)}
+                                    className="btn-icon-action btn-danger-icon"
+                                    title="Remove from route"
+                                  >
+                                    <Trash2 size={15} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()
               )}
             </div>
           )}
@@ -2129,6 +2624,238 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MODAL 8: ROUTE CLUE CREATE / EDIT
+      ═══════════════════════════════════════════════════════════════════════ */}
+      {routeHintModal && (
+        <div className="modal-backdrop" onClick={() => setRouteHintModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-heading">
+                {routeHintModal.mode === 'create' ? 'Add Clue to Team Route' : 'Edit Route Clue'}
+              </h3>
+            </div>
+            <form onSubmit={handleSaveRouteHint} className="modal-body">
+              <div className="form-group">
+                <label className="input-label">CLUE TITLE</label>
+                <input
+                  type="text"
+                  placeholder="e.g. The Silicon Gate Riddle"
+                  value={routeHintModal.hint.title || ''}
+                  onChange={(e) =>
+                    setRouteHintModal({
+                      ...routeHintModal,
+                      hint: { ...routeHintModal.hint, title: e.target.value },
+                    })
+                  }
+                  required
+                  className="modal-input"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="input-label">CLUE DESCRIPTION / RIDDLE</label>
+                <textarea
+                  rows={4}
+                  placeholder="Enter riddle or location coordinates to guide the team..."
+                  value={routeHintModal.hint.content || ''}
+                  onChange={(e) =>
+                    setRouteHintModal({
+                      ...routeHintModal,
+                      hint: { ...routeHintModal.hint, content: e.target.value },
+                    })
+                  }
+                  required
+                  className="modal-input"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="input-label">LINKED PHYSICAL CHECKPOINT (OPTIONAL)</label>
+                <select
+                  value={routeHintModal.hint.checkpointId || ''}
+                  onChange={(e) =>
+                    setRouteHintModal({
+                      ...routeHintModal,
+                      hint: { ...routeHintModal.hint, checkpointId: e.target.value || null },
+                    })
+                  }
+                  className="modal-input"
+                >
+                  <option value="">No physical checkpoint required</option>
+                  {checkpointsData.map((cp) => (
+                    <option key={cp.id} value={cp.id}>
+                      {cp.name} ({cp.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="input-label">STATUS</label>
+                <select
+                  value={routeHintModal.hint.status}
+                  onChange={(e) =>
+                    setRouteHintModal({
+                      ...routeHintModal,
+                      hint: { ...routeHintModal.hint, status: e.target.value },
+                    })
+                  }
+                  className="modal-input"
+                >
+                  <option value="draft">Draft (Hidden from team until published)</option>
+                  <option value="published">Published (Live for this team)</option>
+                </select>
+              </div>
+
+              <div className="modal-footer" style={{ marginTop: '16px' }}>
+                <button type="button" className="btn-modal-close" onClick={() => setRouteHintModal(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-portal-submit" style={{ width: 'auto', padding: '9px 24px' }}>
+                  Save Clue
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MODAL 9: ASSIGN EXISTING GLOBAL CLUES TO ROUTE
+      ═══════════════════════════════════════════════════════════════════════ */}
+      {assignExistingModal && (
+        <div className="modal-backdrop" onClick={() => setAssignExistingModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+            <div className="modal-header">
+              <h3 className="modal-heading">Assign Existing Clues to Route</h3>
+            </div>
+            <div className="modal-body">
+              <p className="modal-note" style={{ marginBottom: '14px' }}>
+                Select global clues to copy into this team's custom journey:
+              </p>
+              <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {hintsData.map((h) => {
+                  const isChecked = selectedExistingHintIds.includes(h.id);
+                  return (
+                    <label
+                      key={h.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 12px',
+                        background: isChecked ? 'rgba(229, 169, 104, 0.12)' : 'rgba(255, 255, 255, 0.04)',
+                        border: isChecked ? '1px solid #e5a968' : '1px solid rgba(255, 255, 255, 0.08)',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedExistingHintIds((prev) => [...prev, h.id]);
+                          } else {
+                            setSelectedExistingHintIds((prev) => prev.filter((id) => id !== h.id));
+                          }
+                        }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ color: '#ffffff', display: 'block', fontSize: '13px' }}>
+                          #{h.sequenceNumber} — {h.title}
+                        </strong>
+                        <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                          {h.content.slice(0, 60)}…
+                        </span>
+                      </div>
+                      <span className={`status-pill status-${h.status}`} style={{ fontSize: '10px' }}>
+                        {h.status.toUpperCase()}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="modal-footer" style={{ marginTop: '16px' }}>
+                <button type="button" className="btn-modal-close" onClick={() => setAssignExistingModal(false)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAssignExistingHints}
+                  disabled={selectedExistingHintIds.length === 0}
+                  className="btn-portal-submit"
+                  style={{ width: 'auto', padding: '9px 24px' }}
+                >
+                  Assign {selectedExistingHintIds.length} Clue(s)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MODAL 10: PREVIEW COMPLETE TEAM ROUTE
+      ═══════════════════════════════════════════════════════════════════════ */}
+      {previewRouteModal && (
+        <div className="modal-backdrop" onClick={() => setPreviewRouteModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
+            <div className="modal-header">
+              <div>
+                <span className="modal-badge" style={{ color: '#e5a968' }}>ROUTE INSPECTOR</span>
+                <h3 className="modal-heading">{previewRouteModal.routeName}</h3>
+              </div>
+            </div>
+            <div className="modal-body">
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', marginBottom: '16px' }}>
+                <div>
+                  <span style={{ fontSize: '11px', color: '#94a3b8', display: 'block' }}>TEAM ASSIGNED</span>
+                  <strong style={{ color: '#ffffff' }}>Slot #{previewRouteModal.slotNumber} ({previewRouteModal.teamName || 'Unregistered'})</strong>
+                </div>
+                <div>
+                  <span style={{ fontSize: '11px', color: '#94a3b8', display: 'block' }}>PUBLICATION</span>
+                  <span className={`status-pill status-${previewRouteModal.status}`}>{previewRouteModal.status.toUpperCase()}</span>
+                </div>
+              </div>
+
+              <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {previewRouteModal.hints?.map((h, i) => (
+                  <div key={h.id} style={{ padding: '12px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <strong style={{ color: '#e5a968', fontSize: '13px' }}>Stage #{i + 1}: {h.title}</strong>
+                      <span className={`status-pill status-${h.status}`} style={{ fontSize: '10px' }}>{h.status.toUpperCase()}</span>
+                    </div>
+                    <p style={{ margin: '0 0 6px 0', fontSize: '13px', color: '#cbd5e1', lineHeight: '1.4' }}>{h.content}</p>
+                    {h.checkpointName && (
+                      <span style={{ fontSize: '11px', color: '#60a5fa', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <MapPin size={11} /> Required Checkpoint: {h.checkpointName}
+                      </span>
+                    )}
+                  </div>
+                ))}
+
+                {previewRouteModal.finalDestination && (
+                  <div style={{ padding: '12px', background: 'rgba(217, 119, 6, 0.14)', border: '1px solid rgba(217, 119, 6, 0.4)', borderRadius: '8px', textAlign: 'center' }}>
+                    <Flag size={20} style={{ color: '#f59e0b', margin: '0 auto 4px auto', display: 'block' }} />
+                    <span style={{ fontSize: '11px', color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block' }}>Final Finish Condition</span>
+                    <strong style={{ color: '#ffffff', fontSize: '14px' }}>{previewRouteModal.finalDestination}</strong>
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-footer" style={{ marginTop: '16px' }}>
+                <button type="button" className="btn-modal-close" onClick={() => setPreviewRouteModal(null)}>
+                  Close Preview
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

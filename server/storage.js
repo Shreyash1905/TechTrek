@@ -101,6 +101,7 @@ export async function initStorage() {
       teams: initialSlots,
       hints: [],
       checkpoints: [],
+      teamRoutes: {}, // slotId -> { teamId, routeName, status: 'published'|'draft', finalDestination: '', hintIds: [], checkpointIds: [], createdAt, updatedAt }
       updatedAt: new Date().toISOString(),
     };
 
@@ -143,7 +144,7 @@ export async function updateAdminData(updaterFn) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getEventState() {
-  return await readJsonSafe(EVENT_FILE, {
+  const state = await readJsonSafe(EVENT_FILE, {
     settings: {
       eventName: 'SparDhaM 2026 — Tech Trek',
       participantUsername: 'SparDhaM2026',
@@ -154,7 +155,14 @@ export async function getEventState() {
     teams: [],
     hints: [],
     checkpoints: [],
+    teamRoutes: {},
   });
+
+  if (!state.teamRoutes) {
+    state.teamRoutes = {};
+  }
+
+  return state;
 }
 
 export async function updateEventState(updaterFn) {

@@ -478,6 +478,12 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
                   <Trophy size={48} className="trophy-gold" />
                   <h3 className="final-title">Final Clue Reached!</h3>
                   <p className="final-desc">{currentHintData.message}</p>
+                  {currentHintData.finalDestination && (
+                    <div className="destination-badge-box" style={{ margin: '14px 0', padding: '12px', background: 'rgba(217, 119, 6, 0.12)', border: '1px solid rgba(217, 119, 6, 0.35)', borderRadius: '8px', textAlign: 'center' }}>
+                      <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#f59e0b', display: 'block', marginBottom: '4px' }}>Final Destination</span>
+                      <strong style={{ fontSize: '16px', color: '#ffffff' }}>{currentHintData.finalDestination}</strong>
+                    </div>
+                  )}
                   <div className="final-tips">
                     <span>Inspect your last location carefully. The physical prize is within arm’s reach!</span>
                   </div>
@@ -488,6 +494,11 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
                     <span className="clue-step-badge">
                       CLUE {currentHintData.currentHintNumber} OF {currentHintData.totalHints}
                     </span>
+                    {currentHintData.routeName && (
+                      <span className="route-badge-pill" style={{ fontSize: '11px', background: 'rgba(255, 255, 255, 0.08)', color: '#94a3b8', padding: '3px 8px', borderRadius: '4px', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                        {currentHintData.routeName}
+                      </span>
+                    )}
                     <span className="clue-checkpoint-tag">
                       <MapPin size={12} />
                       <span>{currentHintData.hint.checkpointName || 'Campus Checkpoint'}</span>
