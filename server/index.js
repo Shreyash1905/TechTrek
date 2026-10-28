@@ -1,9 +1,15 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { initStorage } from './storage.js';
 import participantRoutes from './routes/participant.js';
 import adminRoutes from './routes/admin.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distPath = path.resolve(__dirname, '../dist');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -44,6 +50,8 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(express.static(distPath));
+
 // Global error handler
 app.use((err, req, res, next) => {
   console.error('[Unhandled Server Error]:', err);
@@ -52,6 +60,11 @@ app.use((err, req, res, next) => {
     error: 'INTERNAL_SERVER_ERROR',
     message: 'An unexpected internal server error occurred.',
   });
+});
+
+// SPA fallback for all non-API GET requests (Express 5 syntax)
+app.get('{*path}', (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 // Start server
