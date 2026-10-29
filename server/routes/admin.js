@@ -1625,7 +1625,7 @@ router.put('/allocation-settings', requireAdmin, async (req, res) => {
  */
 router.post('/hunt-control', requireAdmin, async (req, res) => {
   const { action } = req.body;
-  const validActions = ['activate', 'pause', 'resume', 'close'];
+  const validActions = ['activate', 'pause', 'resume', 'close', 'reopen', 'reset'];
 
   if (!validActions.includes(action)) {
     return res.status(400).json({
@@ -1642,8 +1642,8 @@ router.post('/hunt-control', requireAdmin, async (req, res) => {
   };
   const currentStatus = allocSettings.huntStatus || 'preparation';
 
-  // Validation for ACTIVATE
-  if (action === 'activate') {
+  // Validation for ACTIVATE or REOPEN
+  if (action === 'activate' || action === 'reopen') {
     const publishedHints = (eventState.hints || [])
       .filter((h) => h.status === 'published')
       .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
@@ -1663,9 +1663,9 @@ router.post('/hunt-control', requireAdmin, async (req, res) => {
   let newStatus = currentStatus;
   let auditEventType = '';
 
-  if (action === 'activate') {
+  if (action === 'activate' || action === 'reopen') {
     newStatus = 'active';
-    auditEventType = 'HUNT_ACTIVATED';
+    auditEventType = action === 'reopen' ? 'HUNT_REOPENED' : 'HUNT_ACTIVATED';
   } else if (action === 'pause') {
     if (currentStatus !== 'active') {
       return res.status(400).json({
@@ -1689,6 +1689,9 @@ router.post('/hunt-control', requireAdmin, async (req, res) => {
   } else if (action === 'close') {
     newStatus = 'closed';
     auditEventType = 'HUNT_CLOSED';
+  } else if (action === 'reset') {
+    newStatus = 'preparation';
+    auditEventType = 'HUNT_ALLOCATIONS_RESET';
   }
 
   await updateEventState((state) => {
@@ -1698,6 +1701,18 @@ router.post('/hunt-control', requireAdmin, async (req, res) => {
       huntStatus: 'preparation',
     };
     state.settings.hintAllocationSettings.huntStatus = newStatus;
+
+    if (action === 'reset') {
+      // Clear all team allocations
+      state.allocations = [];
+      // Reset team progress
+      (state.teams || []).forEach((t) => {
+        t.currentHintIndex = 0;
+        t.completedCheckpoints = [];
+        t.sessionTokenHash = null;
+      });
+    }
+
     // Synchronize top-level eventStatus for consistency across legacy systems
     if (newStatus === 'active') {
       state.settings.eventStatus = 'active';

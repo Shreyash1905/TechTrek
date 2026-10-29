@@ -1604,7 +1604,7 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                           </button>
                         )}
 
-                        {allocationData?.summary?.huntStatus !== 'closed' && (
+                        {(allocationData?.summary?.huntStatus === 'active' || allocationData?.summary?.huntStatus === 'paused') && (
                           <button
                             type="button"
                             onClick={() => handleTriggerHuntAction('close')}
@@ -1614,6 +1614,31 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                             <Square size={15} />
                             <span>Close Hunt</span>
                           </button>
+                        )}
+
+                        {allocationData?.summary?.huntStatus === 'closed' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleTriggerHuntAction('reopen')}
+                              className="btn-portal-submit"
+                              style={{ width: 'auto', padding: '10px 20px', background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', border: 'none', color: '#fff' }}
+                              title="Reopen hunt to allow further teams or continue current hunt"
+                            >
+                              <Play size={15} />
+                              <span>Reopen Hunt</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleTriggerHuntAction('reset')}
+                              className="btn-admin-action"
+                              style={{ background: 'rgba(239, 68, 68, 0.15)', borderColor: '#ef4444', color: '#fca5a5' }}
+                              title="Clear all allocated queues and restart in Preparation mode"
+                            >
+                              <RefreshCw size={15} />
+                              <span>Reset & Start Fresh</span>
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -3414,11 +3439,39 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                   <div className="info-callout" style={{ marginBottom: '16px', borderColor: '#ef4444' }}>
                     <AlertTriangle size={18} style={{ color: '#ef4444' }} />
                     <p>
-                      Closing the hunt permanently prevents new hint allocations. Existing data is preserved in event state.
+                      Closing the hunt stops new hint allocations. Existing data is preserved in event state.
                     </p>
                   </div>
                   <p style={{ fontSize: '13px', color: '#cbd5e1' }}>
                     Are you sure you want to conclude and close the hunt?
+                  </p>
+                </div>
+              )}
+
+              {huntControlConfirmModal.action === 'reopen' && (
+                <div>
+                  <div className="info-callout" style={{ marginBottom: '16px', borderColor: '#10b981' }}>
+                    <Play size={18} style={{ color: '#10b981' }} />
+                    <p>
+                      Reopening sets the hunt back to <strong>Active</strong> status. You can increase the Eligible Team Limit if desired to allow additional teams to receive hints!
+                    </p>
+                  </div>
+                  <p style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                    Reopen the live hunt now?
+                  </p>
+                </div>
+              )}
+
+              {huntControlConfirmModal.action === 'reset' && (
+                <div>
+                  <div className="info-callout" style={{ marginBottom: '16px', borderColor: '#ef4444' }}>
+                    <AlertTriangle size={18} style={{ color: '#ef4444' }} />
+                    <p>
+                      Resetting will return the hunt to <strong>Preparation</strong> mode and clear all previous team clue allocations so all teams can start fresh.
+                    </p>
+                  </div>
+                  <p style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                    Are you sure you want to clear current allocations and start fresh?
                   </p>
                 </div>
               )}
@@ -3442,7 +3495,7 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                   width: 'auto',
                   padding: '9px 24px',
                   background:
-                    huntControlConfirmModal.action === 'close'
+                    huntControlConfirmModal.action === 'close' || huntControlConfirmModal.action === 'reset'
                       ? 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)'
                       : huntControlConfirmModal.action === 'pause'
                       ? 'linear-gradient(135deg, #d97706 0%, #f59e0b 100%)'
