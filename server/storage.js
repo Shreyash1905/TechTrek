@@ -102,6 +102,11 @@ export async function initStorage() {
       hints: [],
       checkpoints: [],
       teamRoutes: {}, // slotId -> { teamId, routeName, status: 'published'|'draft', finalDestination: '', hintIds: [], checkpointIds: [], createdAt, updatedAt }
+      hintAllocationSettings: {
+        eligibleTeamLimit: 5,
+        huntStatus: 'preparation', // 'preparation', 'active', 'paused', 'closed'
+      },
+      allocations: [], // [{ teamId, allocationSequence, hintId, allocatedAt, status: 'eligible'|'ineligible' }]
       updatedAt: new Date().toISOString(),
     };
 
@@ -151,15 +156,32 @@ export async function getEventState() {
       maxTeamCapacity: 5,
       progressionMode: 'manual',
       eventStatus: 'preparation',
+      hintAllocationSettings: {
+        eligibleTeamLimit: 5,
+        huntStatus: 'preparation',
+      },
     },
     teams: [],
     hints: [],
     checkpoints: [],
     teamRoutes: {},
+    allocations: [],
   });
 
   if (!state.teamRoutes) {
     state.teamRoutes = {};
+  }
+  if (!state.settings) {
+    state.settings = {};
+  }
+  if (!state.settings.hintAllocationSettings) {
+    state.settings.hintAllocationSettings = {
+      eligibleTeamLimit: state.settings.maxTeamCapacity || 5,
+      huntStatus: state.settings.eventStatus || 'preparation',
+    };
+  }
+  if (!Array.isArray(state.allocations)) {
+    state.allocations = [];
   }
 
   return state;

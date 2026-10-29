@@ -1524,6 +1524,209 @@ router.put('/settings', requireAdmin, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Hint Allocation Settings & Hunt Controls (FCFS Engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get current hint allocation settings, summary metrics, and allocation history
+ */
+router.get('/allocation-settings', requireAdmin, async (req, res) => {
+  const eventState = await getEventState();
+  const settings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: eventState.settings?.maxTeamCapacity || 5,
+    huntStatus: eventState.settings?.eventStatus || 'preparation',
+  };
+
+  const publishedHints = (eventState.hints || [])
+    .filter((h) => h.status === 'published')
+    .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+  const allocations = eventState.allocations || [];
+  const teamMap = new Map((eventState.teams || []).map((t) => [t.id, t]));
+  const hintMap = new Map((eventState.hints || []).map((h) => [h.id, h]));
+
+  const enrichedAllocations = allocations.map((alloc) => {
+    const team = teamMap.get(alloc.teamId);
+    const hint = alloc.hintId ? hintMap.get(alloc.hintId) : null;
+    return {
+      ...alloc,
+      teamName: team?.teamName || null,
+      slotNumber: team?.slotNumber || null,
+      hintTitle: hint?.title || null,
+      hintSequenceNumber: hint?.sequenceNumber || null,
+    };
+  });
+
+  const eligibleCount = allocations.filter((a) => a.status === 'eligible').length;
+  const ineligibleCount = allocations.filter((a) => a.status === 'ineligible').length;
+
+  res.json({
+    success: true,
+    settings,
+    summary: {
+      huntStatus: settings.huntStatus,
+      eligibleTeamLimit: settings.eligibleTeamLimit,
+      publishedHintsCount: publishedHints.length,
+      totalHintsCount: (eventState.hints || []).length,
+      maxTeamCapacity: eventState.settings?.maxTeamCapacity || 5,
+      totalTeamsCount: (eventState.teams || []).length,
+      eligibleAllocationsCount: eligibleCount,
+      ineligibleAllocationsCount: ineligibleCount,
+      canActivate: publishedHints.length >= settings.eligibleTeamLimit,
+    },
+    allocations: enrichedAllocations,
+  });
+});
+
+/**
+ * Update hint allocation settings (e.g. eligibleTeamLimit)
+ */
+router.put('/allocation-settings', requireAdmin, async (req, res) => {
+  const { eligibleTeamLimit } = req.body;
+  const eventState = await getEventState();
+  const capacity = eventState.settings?.maxTeamCapacity || 20;
+
+  const numLimit = parseInt(eligibleTeamLimit, 10);
+  if (isNaN(numLimit) || numLimit < 1 || numLimit > capacity) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_LIMIT',
+      message: `Eligible team limit must be an integer between 1 and configured capacity (${capacity}).`,
+    });
+  }
+
+  let oldLimit = 5;
+
+  await updateEventState((state) => {
+    state.settings = state.settings || {};
+    state.settings.hintAllocationSettings = state.settings.hintAllocationSettings || {};
+    oldLimit = state.settings.hintAllocationSettings.eligibleTeamLimit || 5;
+    state.settings.hintAllocationSettings.eligibleTeamLimit = numLimit;
+    return state;
+  });
+
+  await addAuditLog({
+    eventType: 'ALLOCATION_LIMIT_CHANGED',
+    actorType: 'administrator',
+    status: 'success',
+    details: `Updated eligible team limit from ${oldLimit} to ${numLimit} (team capacity: ${capacity}).`,
+  });
+
+  const updatedState = await getEventState();
+  res.json({
+    success: true,
+    settings: updatedState.settings.hintAllocationSettings,
+    message: `Eligible team limit updated to ${numLimit}.`,
+  });
+});
+
+/**
+ * Hunt controls: Activate, Pause, Resume, Close Hunt
+ */
+router.post('/hunt-control', requireAdmin, async (req, res) => {
+  const { action } = req.body;
+  const validActions = ['activate', 'pause', 'resume', 'close'];
+
+  if (!validActions.includes(action)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_ACTION',
+      message: `Action must be one of: ${validActions.join(', ')}.`,
+    });
+  }
+
+  const eventState = await getEventState();
+  const allocSettings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: 5,
+    huntStatus: 'preparation',
+  };
+  const currentStatus = allocSettings.huntStatus || 'preparation';
+
+  // Validation for ACTIVATE
+  if (action === 'activate') {
+    const publishedHints = (eventState.hints || [])
+      .filter((h) => h.status === 'published')
+      .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+    const requiredHints = allocSettings.eligibleTeamLimit || 5;
+    if (publishedHints.length < requiredHints) {
+      return res.status(400).json({
+        success: false,
+        error: 'INSUFFICIENT_HINTS',
+        message: `Cannot activate hunt: Configured eligible team limit is ${requiredHints}, but only ${publishedHints.length} hint(s) are currently published. Please publish at least ${requiredHints} hints first.`,
+        requiredHints,
+        publishedHints: publishedHints.length,
+      });
+    }
+  }
+
+  let newStatus = currentStatus;
+  let auditEventType = '';
+
+  if (action === 'activate') {
+    newStatus = 'active';
+    auditEventType = 'HUNT_ACTIVATED';
+  } else if (action === 'pause') {
+    if (currentStatus !== 'active') {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_STATE_TRANSITION',
+        message: `Cannot pause hunt when current status is "${currentStatus}".`,
+      });
+    }
+    newStatus = 'paused';
+    auditEventType = 'HUNT_PAUSED';
+  } else if (action === 'resume') {
+    if (currentStatus !== 'paused') {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_STATE_TRANSITION',
+        message: `Cannot resume hunt when current status is "${currentStatus}".`,
+      });
+    }
+    newStatus = 'active';
+    auditEventType = 'HUNT_RESUMED';
+  } else if (action === 'close') {
+    newStatus = 'closed';
+    auditEventType = 'HUNT_CLOSED';
+  }
+
+  await updateEventState((state) => {
+    state.settings = state.settings || {};
+    state.settings.hintAllocationSettings = state.settings.hintAllocationSettings || {
+      eligibleTeamLimit: 5,
+      huntStatus: 'preparation',
+    };
+    state.settings.hintAllocationSettings.huntStatus = newStatus;
+    // Synchronize top-level eventStatus for consistency across legacy systems
+    if (newStatus === 'active') {
+      state.settings.eventStatus = 'active';
+    } else if (newStatus === 'closed') {
+      state.settings.eventStatus = 'finished';
+    } else if (newStatus === 'preparation') {
+      state.settings.eventStatus = 'preparation';
+    }
+    return state;
+  });
+
+  await addAuditLog({
+    eventType: auditEventType,
+    actorType: 'administrator',
+    status: 'success',
+    details: `Admin changed hunt status from "${currentStatus}" to "${newStatus}".`,
+  });
+
+  const updatedState = await getEventState();
+  res.json({
+    success: true,
+    huntStatus: newStatus,
+    message: `Hunt successfully transitioned to "${newStatus}".`,
+    settings: updatedState.settings.hintAllocationSettings,
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Audit Logs & Secure CSV Export
 // ─────────────────────────────────────────────────────────────────────────────
 

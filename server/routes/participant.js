@@ -65,28 +65,55 @@ router.post('/access', async (req, res) => {
     });
   }
 
-  // Enforce event lifecycle status
-  if (eventState.settings?.eventStatus === 'preparation') {
+  // Check hunt status from hintAllocationSettings or eventStatus
+  const allocSettings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: eventState.settings?.maxTeamCapacity || 5,
+    huntStatus: eventState.settings?.eventStatus || 'preparation',
+  };
+  const huntStatus = allocSettings.huntStatus || 'preparation';
+
+  if (huntStatus === 'preparation') {
     return res.status(403).json({
       success: false,
-      error: 'EVENT_IN_PREPARATION',
-      message: 'The event is currently in preparation mode. Team access will open once coordinators activate the hunt.',
+      error: 'HUNT_IN_PREPARATION',
+      huntStatus: 'preparation',
+      message: 'The hunt is currently in preparation mode. Clue allocation opens once coordinators activate the hunt.',
     });
   }
 
-  if (eventState.settings?.eventStatus === 'finished') {
+  if (huntStatus === 'paused') {
     return res.status(403).json({
       success: false,
-      error: 'EVENT_FINISHED',
+      error: 'HUNT_PAUSED',
+      huntStatus: 'paused',
+      message: 'The hunt is currently paused by coordinators. Please standby.',
+    });
+  }
+
+  if (huntStatus === 'closed') {
+    return res.status(403).json({
+      success: false,
+      error: 'HUNT_CLOSED',
+      huntStatus: 'closed',
       message: 'The hunt has concluded. Thank you for participating in SparDhaM 2026 Tech Trek!',
     });
   }
 
-  // Issue new session token
+  // Issue new session token & perform ATOMIC FCFS hint allocation inside write queue
   const rawToken = generateSessionToken();
   const tokenHash = hashToken(rawToken);
 
+  let teamAllocation = null;
+  let newlyAllocated = false;
+
   await updateEventState((state) => {
+    state.settings = state.settings || {};
+    state.settings.hintAllocationSettings = state.settings.hintAllocationSettings || {
+      eligibleTeamLimit: 5,
+      huntStatus: 'active',
+    };
+    state.allocations = state.allocations || [];
+
     const slot = state.teams.find((t) => t.id === teamSlot.id);
     if (slot) {
       slot.sessionTokenHash = tokenHash;
@@ -95,19 +122,86 @@ router.post('/access', async (req, res) => {
         slot.status = 'reserved';
       }
     }
+
+    // Check if team already has an allocation
+    let existing = state.allocations.find((a) => a.teamId === teamSlot.id);
+
+    if (existing) {
+      teamAllocation = { ...existing };
+    } else {
+      // Allocate atomically
+      const currentEligible = state.allocations.filter((a) => a.status === 'eligible');
+      const limit = state.settings.hintAllocationSettings.eligibleTeamLimit || 5;
+
+      const publishedHints = (state.hints || [])
+        .filter((h) => h.status === 'published')
+        .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+      if (currentEligible.length < limit) {
+        const nextSequence = currentEligible.length + 1;
+        const assignedHint = publishedHints[nextSequence - 1] || null;
+
+        const newAlloc = {
+          teamId: teamSlot.id,
+          allocationSequence: nextSequence,
+          hintId: assignedHint ? assignedHint.id : null,
+          allocatedAt: new Date().toISOString(),
+          status: 'eligible',
+        };
+
+        state.allocations.push(newAlloc);
+        teamAllocation = { ...newAlloc };
+        newlyAllocated = true;
+      } else {
+        // Eligibility limit reached: record ineligible decision persistently
+        const ineligibleAlloc = {
+          teamId: teamSlot.id,
+          allocationSequence: null,
+          hintId: null,
+          allocatedAt: new Date().toISOString(),
+          status: 'ineligible',
+        };
+
+        state.allocations.push(ineligibleAlloc);
+        teamAllocation = { ...ineligibleAlloc };
+        newlyAllocated = true;
+      }
+    }
+
     return state;
   });
 
   resetRateLimit(ip, 'participant_access');
 
+  // Audit logging for authentication & allocation
   await addAuditLog({
     eventType: 'PARTICIPANT_AUTH_SUCCESS',
     actorType: 'participant',
     teamId: teamSlot.id,
     status: 'success',
-    details: `Authenticated into Slot ${teamSlot.slotNumber}${teamSlot.teamName ? ` as "${teamSlot.teamName}"` : ' (Unregistered)'}.`,
+    details: `Authenticated into Slot ${teamSlot.slotNumber}${teamSlot.teamName ? ` as "${teamSlot.teamName}"` : ' (Unregistered)'}. Allocation Status: ${teamAllocation?.status}${teamAllocation?.allocationSequence ? ` (#${teamAllocation.allocationSequence})` : ''}.`,
     ip,
   });
+
+  if (newlyAllocated) {
+    if (teamAllocation.status === 'eligible') {
+      await addAuditLog({
+        eventType: 'HINT_ALLOCATED',
+        actorType: 'system',
+        teamId: teamSlot.id,
+        status: 'success',
+        details: `Team Slot #${teamSlot.slotNumber} granted allocation sequence #${teamAllocation.allocationSequence} (Hint ID: ${teamAllocation.hintId || 'pending'}).`,
+      });
+    } else {
+      await addAuditLog({
+        eventType: 'ALLOCATION_INELIGIBLE',
+        actorType: 'system',
+        teamId: teamSlot.id,
+        status: 'warning',
+        details: `Team Slot #${teamSlot.slotNumber} marked ineligible: eligible team limit reached.`,
+      });
+    }
+  }
 
   // Set HTTP-only cookie as well for security
   res.cookie('participant_token', rawToken, {
@@ -127,14 +221,29 @@ router.post('/access', async (req, res) => {
       currentHintIndex: teamSlot.currentHintIndex,
       completedCheckpoints: teamSlot.completedCheckpoints || [],
     },
+    allocation: {
+      status: teamAllocation?.status || 'eligible',
+      allocationSequence: teamAllocation?.allocationSequence || null,
+      isLate: teamAllocation?.status === 'ineligible',
+      message: teamAllocation?.status === 'ineligible'
+        ? "You’re late! Better luck next time. The available hint positions have already been claimed."
+        : null,
+    },
   });
 });
 
 /**
  * Get current authenticated participant session state
  */
-router.get('/session', requireParticipant, (req, res) => {
+router.get('/session', requireParticipant, async (req, res) => {
   const { id, slotNumber, teamName, status, currentHintIndex, completedCheckpoints } = req.team;
+  const eventState = await getEventState();
+  const alloc = (eventState.allocations || []).find((a) => a.teamId === id);
+  const allocSettings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: 5,
+    huntStatus: eventState.settings?.eventStatus || 'preparation',
+  };
+
   res.json({
     success: true,
     team: {
@@ -144,6 +253,15 @@ router.get('/session', requireParticipant, (req, res) => {
       status,
       currentHintIndex,
       completedCheckpoints: completedCheckpoints || [],
+    },
+    allocation: {
+      status: alloc?.status || 'eligible',
+      allocationSequence: alloc?.allocationSequence || null,
+      isLate: alloc?.status === 'ineligible',
+      huntStatus: allocSettings.huntStatus || 'active',
+      message: alloc?.status === 'ineligible'
+        ? "You’re late! Better luck next time. The available hint positions have already been claimed."
+        : null,
     },
   });
 });
@@ -291,9 +409,85 @@ function getTeamOrderedHints(eventState, teamId) {
 router.get('/hint', requireParticipant, async (req, res) => {
   const eventState = await getEventState();
   const team = eventState.teams.find((t) => t.id === req.team.id) || req.team;
-  const currentIndex = team.currentHintIndex || 0;
 
-  const { hasRoute, routePublished, route, publishedHints } = getTeamOrderedHints(eventState, team.id);
+  const allocSettings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: 5,
+    huntStatus: eventState.settings?.eventStatus || 'preparation',
+  };
+  const huntStatus = allocSettings.huntStatus || 'preparation';
+
+  // Check hunt status
+  if (huntStatus === 'preparation') {
+    return res.status(403).json({
+      success: false,
+      error: 'HUNT_IN_PREPARATION',
+      message: 'The hunt is currently in preparation mode. Team clues will open once coordinators activate the hunt.',
+    });
+  }
+
+  if (huntStatus === 'paused') {
+    return res.status(403).json({
+      success: false,
+      error: 'HUNT_PAUSED',
+      message: 'The hunt is currently paused by coordinators. Please standby.',
+    });
+  }
+
+  if (huntStatus === 'closed') {
+    return res.status(403).json({
+      success: false,
+      error: 'HUNT_CLOSED',
+      message: 'The hunt has concluded. Thank you for participating in SparDhaM 2026 Tech Trek!',
+    });
+  }
+
+  // Check allocation status for this team
+  const allocation = (eventState.allocations || []).find((a) => a.teamId === team.id);
+
+  if (allocation && allocation.status === 'ineligible') {
+    return res.status(403).json({
+      success: false,
+      isLate: true,
+      error: 'ALLOCATION_INELIGIBLE',
+      message: 'You’re late! Better luck next time. The available hint positions have already been claimed.',
+    });
+  }
+
+  // For eligible teams, resolve their assigned initial hint and sequence
+  const publishedHints = (eventState.hints || [])
+    .filter((h) => h.status === 'published')
+    .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+  // If team has an assigned FCFS hint in allocation
+  let initialHint = null;
+  if (allocation?.hintId) {
+    initialHint = publishedHints.find((h) => h.id === allocation.hintId) || null;
+  } else if (allocation?.allocationSequence) {
+    initialHint = publishedHints[allocation.allocationSequence - 1] || null;
+  }
+
+  const currentIndex = team.currentHintIndex || 0;
+  const { hasRoute, routePublished, route, publishedHints: teamRouteHints } = getTeamOrderedHints(eventState, team.id);
+
+  // If a team route exists, use it; otherwise use global published hints starting with initial assigned hint
+  let activeHintList = teamRouteHints;
+  if (!hasRoute) {
+    // If team has FCFS initial hint, sequence starts from assigned hint
+    if (initialHint) {
+      const idx = publishedHints.findIndex((h) => h.id === initialHint.id);
+      if (idx !== -1) {
+        // Ordered starting with this team's assigned hint
+        activeHintList = [
+          publishedHints[idx],
+          ...publishedHints.filter((h, i) => i !== idx),
+        ];
+      } else {
+        activeHintList = publishedHints;
+      }
+    } else {
+      activeHintList = publishedHints;
+    }
+  }
 
   if (hasRoute && !routePublished) {
     return res.json({
@@ -303,7 +497,7 @@ router.get('/hint', requireParticipant, async (req, res) => {
     });
   }
 
-  if (publishedHints.length === 0) {
+  if (activeHintList.length === 0) {
     return res.json({
       success: true,
       hasHints: false,
@@ -311,12 +505,12 @@ router.get('/hint', requireParticipant, async (req, res) => {
     });
   }
 
-  if (currentIndex >= publishedHints.length) {
+  if (currentIndex >= activeHintList.length) {
     return res.json({
       success: true,
       hasHints: true,
       finished: true,
-      totalHints: publishedHints.length,
+      totalHints: activeHintList.length,
       finalDestination: route?.finalDestination || null,
       message: route?.finalDestination
         ? `You have conquered all clues! Final Destination: ${route.finalDestination}`
@@ -324,7 +518,7 @@ router.get('/hint', requireParticipant, async (req, res) => {
     });
   }
 
-  const activeHint = publishedHints[currentIndex];
+  const activeHint = activeHintList[currentIndex];
 
   // Check if this hint requires a checkpoint verification
   let requiresCheckpoint = false;
@@ -346,8 +540,9 @@ router.get('/hint', requireParticipant, async (req, res) => {
     hasHints: true,
     finished: false,
     teamName: team.teamName || `Slot ${team.slotNumber}`,
-    totalHints: publishedHints.length,
+    totalHints: activeHintList.length,
     currentHintNumber: currentIndex + 1,
+    allocationSequence: allocation?.allocationSequence || null,
     routeName: route?.routeName || null,
     finalDestination: route?.finalDestination || null,
     hint: {
@@ -371,6 +566,29 @@ router.post('/next-hint', requireParticipant, async (req, res) => {
   const team = eventState.teams.find((t) => t.id === req.team.id);
   if (!team) {
     return res.status(404).json({ success: false, error: 'TEAM_NOT_FOUND' });
+  }
+
+  // Check allocation status: ineligible teams cannot progress
+  const allocation = (eventState.allocations || []).find((a) => a.teamId === team.id);
+  if (allocation && allocation.status === 'ineligible') {
+    return res.status(403).json({
+      success: false,
+      error: 'ALLOCATION_INELIGIBLE',
+      message: 'You’re late! Better luck next time. The available hint positions have already been claimed.',
+    });
+  }
+
+  const allocSettings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: 5,
+    huntStatus: eventState.settings?.eventStatus || 'preparation',
+  };
+  const huntStatus = allocSettings.huntStatus || 'preparation';
+  if (huntStatus !== 'active') {
+    return res.status(403).json({
+      success: false,
+      error: 'HUNT_NOT_ACTIVE',
+      message: `Hunt is currently ${huntStatus}. Progression is paused.`,
+    });
   }
 
   const { hasRoute, routePublished, route, publishedHints } = getTeamOrderedHints(eventState, team.id);
@@ -452,8 +670,30 @@ router.post('/verify-checkpoint', requireParticipant, async (req, res) => {
     });
   }
 
-  const cleanCode = code.trim().toUpperCase();
   const eventState = await getEventState();
+
+  // Check allocation status: ineligible teams cannot verify checkpoints
+  const allocation = (eventState.allocations || []).find((a) => a.teamId === req.team.id);
+  if (allocation && allocation.status === 'ineligible') {
+    return res.status(403).json({
+      success: false,
+      error: 'ALLOCATION_INELIGIBLE',
+      message: 'You’re late! Better luck next time. The available hint positions have already been claimed.',
+    });
+  }
+
+  const allocSettings = eventState.settings?.hintAllocationSettings || {
+    eligibleTeamLimit: 5,
+    huntStatus: eventState.settings?.eventStatus || 'preparation',
+  };
+  const huntStatus = allocSettings.huntStatus || 'preparation';
+  if (huntStatus !== 'active') {
+    return res.status(403).json({
+      success: false,
+      error: 'HUNT_NOT_ACTIVE',
+      message: `Hunt is currently ${huntStatus}. Checkpoint verification is suspended.`,
+    });
+  }
 
   // Find checkpoint by code or unique token
   const checkpoint = (eventState.checkpoints || []).find(

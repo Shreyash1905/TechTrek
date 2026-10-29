@@ -31,6 +31,12 @@ import {
   Route,
   Milestone,
   Flag,
+  Play,
+  Pause,
+  Square,
+  Sparkles,
+  Zap,
+  Sliders,
 } from 'lucide-react';
 
 export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
@@ -47,6 +53,12 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
   const [settingsData, setSettingsData] = useState(null);
   const [logsData, setLogsData] = useState([]);
   const [logsPagination, setLogsPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+
+  // Hint Allocation & FCFS Engine state
+  const [allocationData, setAllocationData] = useState(null);
+  const [eligibleLimitInput, setEligibleLimitInput] = useState(5);
+  const [huntControlConfirmModal, setHuntControlConfirmModal] = useState(null); // { action: 'activate' | 'pause' | 'resume' | 'close', summary: {} }
+  const [huntActionLoading, setHuntActionLoading] = useState(false);
 
   // Team Routes data states
   const [routesData, setRoutesData] = useState([]);
@@ -191,6 +203,24 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
         }
         if (cData.success) setCheckpointsData(cData.checkpoints || []);
         if (hData.success) setHintsData(hData.hints || []);
+      } else if (tab === 'allocation') {
+        const [allocRes, hintsRes, teamsRes] = await Promise.all([
+          adminFetch('/api/admin/allocation-settings'),
+          adminFetch('/api/admin/hints'),
+          adminFetch('/api/admin/teams'),
+        ]);
+        if (!allocRes) return;
+        const aData = await allocRes.json();
+        const hData = hintsRes ? await hintsRes.json() : null;
+        const tData = teamsRes ? await teamsRes.json() : null;
+        if (aData.success) {
+          setAllocationData(aData);
+          setEligibleLimitInput(aData.settings?.eligibleTeamLimit || 5);
+        } else {
+          setFetchError(aData.message || 'Failed to load allocation settings.');
+        }
+        if (hData?.success) setHintsData(hData.hints || []);
+        if (tData?.success) setTeamsData(tData.teams || []);
       } else if (tab === 'settings') {
         const res = await adminFetch('/api/admin/settings');
         if (!res) return;
@@ -772,6 +802,76 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
   };
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Handlers: Hint Allocation Settings & Hunt Controls (FCFS Engine)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const handleSaveEligibleLimit = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await adminFetch('/api/admin/allocation-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ eligibleTeamLimit: eligibleLimitInput }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message || 'Eligible team limit updated.');
+        fetchTabData('allocation');
+      } else {
+        showToast(data.message || 'Failed to update eligible team limit.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error updating eligible team limit.', 'error');
+    }
+  };
+
+  const handleTriggerHuntAction = (action) => {
+    const summary = allocationData?.summary || {};
+    const publishedCount = summary.publishedHintsCount || 0;
+    const requiredLimit = summary.eligibleTeamLimit || eligibleLimitInput || 5;
+
+    if (action === 'activate' && publishedCount < requiredLimit) {
+      showToast(
+        `Cannot activate hunt: ${requiredLimit} hints required for eligible limit, but only ${publishedCount} published.`,
+        'error'
+      );
+      return;
+    }
+
+    setHuntControlConfirmModal({
+      action,
+      summary,
+      requiredLimit,
+      publishedCount,
+    });
+  };
+
+  const handleConfirmHuntAction = async () => {
+    if (!huntControlConfirmModal) return;
+    const { action } = huntControlConfirmModal;
+    setHuntActionLoading(true);
+    try {
+      const res = await adminFetch('/api/admin/hunt-control', {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message || `Hunt ${action}d successfully!`);
+        setHuntControlConfirmModal(null);
+        fetchTabData('allocation');
+      } else {
+        showToast(data.message || 'Hunt action failed.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error performing hunt action.', 'error');
+    } finally {
+      setHuntActionLoading(false);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Handlers: Settings & Password
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -918,6 +1018,13 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
             >
               <FileText size={17} />
               <span>Manage Hints</span>
+            </button>
+            <button
+              className={`sidebar-nav-item ${activeTab === 'allocation' ? 'active' : ''}`}
+              onClick={() => setActiveTab('allocation')}
+            >
+              <Zap size={17} />
+              <span>Hint Allocation</span>
             </button>
             <button
               className={`sidebar-nav-item ${activeTab === 'routes' ? 'active' : ''}`}
@@ -1403,6 +1510,374 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB: HINT ALLOCATION SETTINGS (FCFS ENGINE) */}
+          {activeTab === 'allocation' && (
+            <div className="admin-view-container">
+              <div className="view-header">
+                <div>
+                  <h2 className="view-title">Hint Allocation Settings</h2>
+                  <p className="view-subtitle">
+                    Dynamic First-Come, First-Served (FCFS) hint distribution engine & hunt lifecycle
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => fetchTabData('allocation', true)}
+                    className="btn-admin-action"
+                    title="Refresh allocation status"
+                  >
+                    <RefreshCw size={14} className={loading ? 'spin' : ''} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              {loading && !allocationData ? (
+                <LoadingSpinner />
+              ) : fetchError && !allocationData ? (
+                <ErrorRetry message={fetchError} />
+              ) : (
+                <div className="allocation-workspace-grid" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  {/* Status Banner & Hunt Controls Card */}
+                  <div className="admin-card hunt-controls-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                      <div>
+                        <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                          CURRENT HUNT STATUS
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span
+                            className={`status-pill status-${allocationData?.summary?.huntStatus || 'preparation'}`}
+                            style={{ fontSize: '14px', padding: '6px 14px', textTransform: 'uppercase', fontWeight: 600 }}
+                          >
+                            {allocationData?.summary?.huntStatus || 'PREPARATION'}
+                          </span>
+                          <span style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                            {allocationData?.summary?.huntStatus === 'active' && '• Live hunt running. Teams are actively allocated hints on login.'}
+                            {allocationData?.summary?.huntStatus === 'paused' && '• Hunt paused. Existing allocations frozen; logins standby.'}
+                            {allocationData?.summary?.huntStatus === 'closed' && '• Hunt closed. New allocations permanently prevented.'}
+                            {allocationData?.summary?.huntStatus === 'preparation' && '• In preparation. Clue feed locked until coordinator activates hunt.'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons: Save Configuration, Activate Hunt, Pause Hunt, Resume Hunt, Close Hunt */}
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        {allocationData?.summary?.huntStatus === 'preparation' && (
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerHuntAction('activate')}
+                            className="btn-portal-submit"
+                            style={{ width: 'auto', padding: '10px 20px', background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', border: 'none', color: '#fff' }}
+                          >
+                            <Play size={15} />
+                            <span>Activate Hunt</span>
+                          </button>
+                        )}
+
+                        {allocationData?.summary?.huntStatus === 'active' && (
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerHuntAction('pause')}
+                            className="btn-admin-action"
+                            style={{ background: 'rgba(234, 179, 8, 0.15)', borderColor: '#eab308', color: '#fef08a' }}
+                          >
+                            <Pause size={15} />
+                            <span>Pause Hunt</span>
+                          </button>
+                        )}
+
+                        {allocationData?.summary?.huntStatus === 'paused' && (
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerHuntAction('resume')}
+                            className="btn-portal-submit"
+                            style={{ width: 'auto', padding: '10px 20px', background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', border: 'none', color: '#fff' }}
+                          >
+                            <Play size={15} />
+                            <span>Resume Hunt</span>
+                          </button>
+                        )}
+
+                        {allocationData?.summary?.huntStatus !== 'closed' && (
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerHuntAction('close')}
+                            className="btn-admin-action btn-danger-action"
+                            style={{ background: 'rgba(239, 68, 68, 0.12)', borderColor: '#ef4444', color: '#fca5a5' }}
+                          >
+                            <Square size={15} />
+                            <span>Close Hunt</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* FCFS Settings Form */}
+                    <form onSubmit={handleSaveEligibleLimit} style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 280px' }}>
+                        <label className="input-label">
+                          ELIGIBLE TEAM LIMIT (MAX DISTINCT TEAMS TO RECEIVE CLUES)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={allocationData?.summary?.maxTeamCapacity || 20}
+                          value={eligibleLimitInput}
+                          onChange={(e) => setEligibleLimitInput(parseInt(e.target.value, 10) || 1)}
+                          required
+                          className="modal-input"
+                          placeholder="e.g. 5"
+                        />
+                        <span className="input-note" style={{ display: 'block', marginTop: '4px', fontSize: '12px', color: '#94a3b8' }}>
+                          Allowed: 1 to {allocationData?.summary?.maxTeamCapacity || 20} teams. Teams logging in beyond this limit receive: "You’re late! Better luck next time."
+                        </span>
+                      </div>
+
+                      <div style={{ flex: '1 1 200px' }}>
+                        <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                          <span style={{ fontSize: '11px', color: '#94a3b8', display: 'block' }}>PUBLISHED CLUES AVAILABLE</span>
+                          <strong style={{ fontSize: '16px', color: (allocationData?.summary?.publishedHintsCount || 0) >= eligibleLimitInput ? '#10b981' : '#f59e0b' }}>
+                            {allocationData?.summary?.publishedHintsCount || 0} Published
+                          </strong>
+                          <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
+                            {(allocationData?.summary?.publishedHintsCount || 0) >= eligibleLimitInput
+                              ? '✓ Ready to allocate'
+                              : `⚠️ Need at least ${eligibleLimitInput} published clues`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="btn-portal-submit admin-submit"
+                        style={{ height: '44px', width: 'auto', padding: '0 24px' }}
+                      >
+                        Save Configuration
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Allocation Metrics Grid */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+                    <div className="admin-card" style={{ padding: '16px' }}>
+                      <span style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', display: 'block' }}>Configured Limit</span>
+                      <strong style={{ fontSize: '24px', color: '#f59e0b' }}>{allocationData?.summary?.eligibleTeamLimit || 5} Teams</strong>
+                      <span style={{ fontSize: '12px', color: '#64748b' }}>Cap for clue distribution</span>
+                    </div>
+
+                    <div className="admin-card" style={{ padding: '16px' }}>
+                      <span style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', display: 'block' }}>Eligible Allocated</span>
+                      <strong style={{ fontSize: '24px', color: '#10b981' }}>{allocationData?.summary?.eligibleAllocationsCount || 0} / {allocationData?.summary?.eligibleTeamLimit || 5}</strong>
+                      <span style={{ fontSize: '12px', color: '#64748b' }}>Teams granted active hints</span>
+                    </div>
+
+                    <div className="admin-card" style={{ padding: '16px' }}>
+                      <span style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', display: 'block' }}>Late / Ineligible</span>
+                      <strong style={{ fontSize: '24px', color: '#ef4444' }}>{allocationData?.summary?.ineligibleAllocationsCount || 0} Teams</strong>
+                      <span style={{ fontSize: '12px', color: '#64748b' }}>Turned away with late notice</span>
+                    </div>
+
+                    <div className="admin-card" style={{ padding: '16px' }}>
+                      <span style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', display: 'block' }}>Published Hints</span>
+                      <strong style={{ fontSize: '24px', color: '#38bdf8' }}>{allocationData?.summary?.publishedHintsCount || 0} Clues</strong>
+                      <span style={{ fontSize: '12px', color: '#64748b' }}>Total published in sequence</span>
+                    </div>
+                  </div>
+
+                  {/* Sequential Hint Allocation Mapping Table */}
+                  <div className="admin-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                      <div>
+                        <h3 className="card-title" style={{ margin: 0 }}>Committed FCFS Allocation Queue</h3>
+                        <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                          Teams assigned strictly in order of initial successful login after hunt activation. Team slot numbers have zero influence.
+                        </p>
+                      </div>
+                    </div>
+
+                    {allocationData?.allocations?.length === 0 ? (
+                      <div style={{ padding: '32px 16px', textAlign: 'center', color: '#94a3b8' }}>
+                        <Zap size={32} style={{ opacity: 0.4, margin: '0 auto 8px auto', display: 'block' }} />
+                        <p style={{ margin: 0, fontWeight: 500 }}>No team allocations committed yet.</p>
+                        <span style={{ fontSize: '12px', color: '#64748b' }}>
+                          Once participants authenticate with their access keys, their order will be committed atomically.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="table-responsive">
+                        <table className="admin-table">
+                          <thead>
+                            <tr>
+                              <th>FCFS ORDER</th>
+                              <th>TEAM IDENTITY</th>
+                              <th>SLOT NUMBER</th>
+                              <th>ALLOCATED CLUE</th>
+                              <th>DECISION STATUS</th>
+                              <th>COMMITTED TIMESTAMP</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allocationData?.allocations?.map((alloc, idx) => (
+                              <tr key={alloc.teamId || idx}>
+                                <td>
+                                  {alloc.allocationSequence ? (
+                                    <strong style={{ color: '#e5a968', fontSize: '14px' }}>
+                                      #{alloc.allocationSequence}
+                                    </strong>
+                                  ) : (
+                                    <span style={{ color: '#64748b' }}>—</span>
+                                  )}
+                                </td>
+                                <td>
+                                  <strong style={{ color: '#ffffff' }}>
+                                    {alloc.teamName || 'Unregistered Team'}
+                                  </strong>
+                                  <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
+                                    {alloc.teamId}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className="hunt-pill" style={{ fontSize: '11px' }}>
+                                    Slot #{alloc.slotNumber || '?'}
+                                  </span>
+                                </td>
+                                <td>
+                                  {alloc.status === 'eligible' ? (
+                                    alloc.hintTitle ? (
+                                      <div>
+                                        <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
+                                          Hint #{alloc.hintSequenceNumber || alloc.allocationSequence}:
+                                        </span>
+                                        <strong style={{ display: 'block', fontSize: '13px', color: '#e2e8f0' }}>
+                                          {alloc.hintTitle}
+                                        </strong>
+                                      </div>
+                                    ) : (
+                                      <span style={{ color: '#38bdf8' }}>Hint #{alloc.allocationSequence}</span>
+                                    )
+                                  ) : (
+                                    <span style={{ color: '#ef4444', fontStyle: 'italic', fontSize: '12px' }}>
+                                      No clue assigned (Late gate)
+                                    </span>
+                                  )}
+                                </td>
+                                <td>
+                                  {alloc.status === 'eligible' ? (
+                                    <span className="status-pill status-active" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', borderColor: '#059669' }}>
+                                      ELIGIBLE (#{alloc.allocationSequence})
+                                    </span>
+                                  ) : (
+                                    <span className="status-pill status-revoked" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', borderColor: '#b91c1c' }}>
+                                      INELIGIBLE (LATE)
+                                    </span>
+                                  )}
+                                </td>
+                                <td>
+                                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                                    {alloc.allocatedAt ? new Date(alloc.allocatedAt).toLocaleTimeString() : '—'}
+                                  </span>
+                                  <span style={{ fontSize: '10px', color: '#64748b', display: 'block' }}>
+                                    {alloc.allocatedAt ? new Date(alloc.allocatedAt).toLocaleDateString() : ''}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Published Hint Sequence Preview Card */}
+                  <div className="admin-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                      <div>
+                        <h3 className="card-title" style={{ margin: 0 }}>Sequential Published Hints Pool</h3>
+                        <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                          Each eligible login takes the corresponding published hint position in 1-to-1 order
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('hints')}
+                        className="btn-admin-action"
+                        style={{ fontSize: '12px' }}
+                      >
+                        <FileText size={14} />
+                        <span>Manage / Reorder Hints</span>
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {hintsData.filter((h) => h.status === 'published').length === 0 ? (
+                        <p style={{ color: '#ef4444', margin: 0, fontSize: '13px' }}>
+                          No published clues available! Go to "Manage Hints" and publish at least {eligibleLimitInput} clues before activating.
+                        </p>
+                      ) : (
+                        hintsData
+                          .filter((h) => h.status === 'published')
+                          .sort((a, b) => a.sequenceNumber - b.sequenceNumber)
+                          .map((h, i) => (
+                            <div
+                              key={h.id}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '12px 14px',
+                                background: i < eligibleLimitInput ? 'rgba(16, 185, 129, 0.06)' : 'rgba(255,255,255,0.02)',
+                                border: i < eligibleLimitInput ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(255,255,255,0.06)',
+                                borderRadius: '8px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '28px',
+                                    height: '28px',
+                                    borderRadius: '6px',
+                                    background: i < eligibleLimitInput ? '#059669' : '#334155',
+                                    color: '#ffffff',
+                                    fontWeight: 700,
+                                    fontSize: '12px',
+                                  }}
+                                >
+                                  {i + 1}
+                                </span>
+                                <div>
+                                  <strong style={{ color: '#ffffff', fontSize: '13px' }}>{h.title}</strong>
+                                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                                    {h.content.slice(0, 90)}{h.content.length > 90 ? '…' : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              <div style={{ textAlign: 'right' }}>
+                                <span
+                                  style={{
+                                    fontSize: '11px',
+                                    padding: '3px 8px',
+                                    borderRadius: '4px',
+                                    background: i < eligibleLimitInput ? 'rgba(16, 185, 129, 0.2)' : 'rgba(148, 163, 184, 0.1)',
+                                    color: i < eligibleLimitInput ? '#34d399' : '#94a3b8',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {i < eligibleLimitInput ? `Assigned to FCFS Team #${i + 1}` : 'Surplus / Standby'}
+                                </span>
+                              </div>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -2855,6 +3330,134 @@ export default function AdminDashboard({ token, onLogout, onNavigateHome }) {
                   Close Preview
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MODAL 11: HUNT CONTROL CONFIRMATION DIALOG
+      ═══════════════════════════════════════════════════════════════════════ */}
+      {huntControlConfirmModal && (
+        <div className="modal-backdrop" onClick={() => !huntActionLoading && setHuntControlConfirmModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+            <div className="modal-header">
+              <div>
+                <span className="modal-badge" style={{ color: '#e5a968' }}>HUNT LIFECYCLE GATE</span>
+                <h3 className="modal-heading" style={{ textTransform: 'capitalize' }}>
+                  Confirm {huntControlConfirmModal.action} Hunt
+                </h3>
+              </div>
+            </div>
+
+            <div className="modal-body">
+              {huntControlConfirmModal.action === 'activate' && (
+                <div>
+                  <div className="info-callout" style={{ marginBottom: '16px' }}>
+                    <Sparkles size={18} className="info-icon" />
+                    <p>
+                      Activating the hunt opens live FCFS clue distribution. The first distinct teams logging in will immediately receive published clues in sequence order.
+                    </p>
+                  </div>
+
+                  <div style={{ padding: '14px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>Configured Eligible Limit:</span>
+                      <strong style={{ color: '#f59e0b' }}>{huntControlConfirmModal.requiredLimit} distinct teams</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>Published Hints Available:</span>
+                      <strong style={{ color: '#10b981' }}>{huntControlConfirmModal.publishedCount} hints published</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>Late Gate Policy:</span>
+                      <strong style={{ color: '#f87171' }}>Team #{huntControlConfirmModal.requiredLimit + 1}+ receive Late Notice</strong>
+                    </div>
+                  </div>
+
+                  <p style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                    Are you ready to initiate the live hunt across campus?
+                  </p>
+                </div>
+              )}
+
+              {huntControlConfirmModal.action === 'pause' && (
+                <div>
+                  <div className="info-callout" style={{ marginBottom: '16px', borderColor: '#eab308' }}>
+                    <AlertTriangle size={18} style={{ color: '#eab308' }} />
+                    <p>
+                      Pausing will freeze the hunt. Existing team allocations and checkpoint progress are preserved safely. Participants will see a standby notice until resumed.
+                    </p>
+                  </div>
+                  <p style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                    Pause the live hunt now?
+                  </p>
+                </div>
+              )}
+
+              {huntControlConfirmModal.action === 'resume' && (
+                <div>
+                  <div className="info-callout" style={{ marginBottom: '16px', borderColor: '#10b981' }}>
+                    <Play size={18} style={{ color: '#10b981' }} />
+                    <p>
+                      Resuming unfreezes the hunt. Teams can continue their mission progression without losing any progress or original hint positions.
+                    </p>
+                  </div>
+                  <p style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                    Resume the live hunt now?
+                  </p>
+                </div>
+              )}
+
+              {huntControlConfirmModal.action === 'close' && (
+                <div>
+                  <div className="info-callout" style={{ marginBottom: '16px', borderColor: '#ef4444' }}>
+                    <AlertTriangle size={18} style={{ color: '#ef4444' }} />
+                    <p>
+                      Closing the hunt permanently prevents new hint allocations. Existing data is preserved in event state.
+                    </p>
+                  </div>
+                  <p style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                    Are you sure you want to conclude and close the hunt?
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer" style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn-modal-close"
+                onClick={() => setHuntControlConfirmModal(null)}
+                disabled={huntActionLoading}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-portal-submit"
+                onClick={handleConfirmHuntAction}
+                disabled={huntActionLoading}
+                style={{
+                  width: 'auto',
+                  padding: '9px 24px',
+                  background:
+                    huntControlConfirmModal.action === 'close'
+                      ? 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)'
+                      : huntControlConfirmModal.action === 'pause'
+                      ? 'linear-gradient(135deg, #d97706 0%, #f59e0b 100%)'
+                      : 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                }}
+              >
+                {huntActionLoading ? (
+                  <>
+                    <Loader2 size={15} className="spin" />
+                    <span>Processing…</span>
+                  </>
+                ) : (
+                  <span>Confirm {huntControlConfirmModal.action}</span>
+                )}
+              </button>
             </div>
           </div>
         </div>

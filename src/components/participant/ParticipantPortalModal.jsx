@@ -56,6 +56,9 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
 
       if (data.success && data.team) {
         setTeamData(data.team);
+        if (data.allocation) {
+          setAllocationInfo(data.allocation);
+        }
         if (!data.team.teamName || data.team.status === 'reserved') {
           setStage('register');
         } else {
@@ -75,6 +78,8 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
     }
   };
 
+  const [allocationInfo, setAllocationInfo] = useState(null);
+
   const loadCurrentHint = async (activeToken) => {
     try {
       setLoading(true);
@@ -83,8 +88,13 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
         headers: { 'x-participant-token': activeToken },
       });
       const data = await res.json();
-      if (data.success) {
+      if (res.status === 403 && data.isLate) {
+        setAllocationInfo({ isLate: true, message: data.message });
+      } else if (data.success) {
         setCurrentHintData(data);
+        if (data.allocationSequence) {
+          setAllocationInfo((prev) => ({ ...prev, sequence: data.allocationSequence, isLate: false }));
+        }
       } else {
         setErrorMsg(data.message || 'Failed to retrieve current clue.');
       }
@@ -121,6 +131,9 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
         setToken(receivedToken);
         localStorage.setItem('techtrek_participant_token', receivedToken);
         setTeamData(data.team);
+        if (data.allocation) {
+          setAllocationInfo(data.allocation);
+        }
 
         if (!data.team.teamName || data.team.status === 'reserved') {
           setStage('register');
@@ -458,6 +471,19 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
                 <div className="hunt-team-identity">
                   <span className="hunt-pill">SLOT #{teamData?.slotNumber}</span>
                   <strong className="hunt-team-title">{teamData?.teamName}</strong>
+                  {allocationInfo?.sequence && (
+                    <span
+                      className="hunt-pill"
+                      style={{
+                        background: 'rgba(245, 158, 11, 0.15)',
+                        color: '#fbbf24',
+                        borderColor: 'rgba(245, 158, 11, 0.4)',
+                        fontWeight: 600,
+                      }}
+                    >
+                      FCFS #{allocationInfo.sequence}
+                    </span>
+                  )}
                 </div>
                 <div className="hunt-refresh-btn-wrap">
                   <button
@@ -472,8 +498,23 @@ export default function ParticipantPortalModal({ isOpen, onClose }) {
                 </div>
               </div>
 
-              {/* Clue Container */}
-              {currentHintData?.finished ? (
+              {/* Late Notice Gate Screen */}
+              {allocationInfo?.isLate ? (
+                <div className="late-notice-card" style={{ padding: '36px 20px', textAlign: 'center', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '12px', margin: '14px 0' }}>
+                  <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', border: '1px solid rgba(239, 68, 68, 0.35)' }}>
+                    <AlertCircle size={28} style={{ color: '#ef4444' }} />
+                  </div>
+                  <h3 style={{ fontSize: '22px', fontWeight: 700, color: '#fca5a5', margin: '0 0 10px 0', letterSpacing: '-0.01em' }}>
+                    You’re Late!
+                  </h3>
+                  <p style={{ fontSize: '15px', color: '#f87171', lineHeight: '1.5', maxWidth: '420px', margin: '0 auto 18px auto', fontWeight: 500 }}>
+                    “Better luck next time. The available hint positions have already been claimed.”
+                  </p>
+                  <div style={{ padding: '10px 16px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', display: 'inline-block', fontSize: '12px', color: '#94a3b8' }}>
+                    Clues for this event are allocated strictly on a First-Come, First-Served basis upon live hunt activation.
+                  </div>
+                </div>
+              ) : currentHintData?.finished ? (
                 <div className="final-stage-card">
                   <Trophy size={48} className="trophy-gold" />
                   <h3 className="final-title">Final Clue Reached!</h3>
